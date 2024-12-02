@@ -5,6 +5,7 @@ const Position = lib.Position;
 const Token = @This();
 
 value: Value,
+src: []const u8,
 position: Position,
 
 pub const Value = union(Type) {

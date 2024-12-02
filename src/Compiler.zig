@@ -45,8 +45,8 @@ pub fn init(allocator: Allocator) !Compiler {
         ._arena = aa,
         ._locals = try aa.alloc(Local, 10),
         ._byte_code = try ByteCode.init(aa),
-        ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO },
-        ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO },
+        ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
+        ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
     };
 }
 
@@ -77,9 +77,12 @@ fn advance(self: *Compiler) !void {
 
 fn consume(self: *Compiler, expected: Token.Type, comptime message: []const u8) !void {
     if (self._current_token.value != expected) {
-        return self.setErrorFmt(error.UnexpectedToken, message ++ ", got '{s}'", .{@tagName(self._current_token.value)}, null);
+        return self.setExpectationError(message);
     }
     return self.advance();
+}
+fn consumeSemicolon(self: *Compiler) !void {
+    return self.consume(.SEMICOLON, "semicolon (',')");
 }
 
 fn match(self: *Compiler, expected: Token.Type) !bool {
@@ -94,7 +97,7 @@ fn declaration(self: *Compiler) CompileError!void {
     switch (self._current_token.value) {
         .VAR => {
             try self.advance();
-            try self.consume(.IDENTIFIER, "Expected variable name");
+            try self.consume(.IDENTIFIER, "variable name");
 
             const variable_name = self._previous_token.value.IDENTIFIER;
             // TODO: check self._locals for a variable with the same name
@@ -107,13 +110,12 @@ fn declaration(self: *Compiler) CompileError!void {
             };
             self._local_count = lc + 1;
 
-            try self.consume(.EQUAL, "Expected assignment operator ('=')");
+            try self.consume(.EQUAL, "assignment operator ('=')");
             try self.expression();
-            try self.consume(.SEMICOLON, "Expected ';'");
+            try self.consumeSemicolon();
 
             // prevents things like: var count = count + 1;
             self._locals[lc].depth = self._scope_depth;
-
         },
         else => return self.statement(),
     }
@@ -124,7 +126,7 @@ fn statement(self: *Compiler) CompileError!void {
         .PRINT => {
             try self.advance();
             try self.expression();
-            try self.consume(.SEMICOLON, "Expected ';'");
+            try self.consumeSemicolon();
             try self._byte_code.op(.PRINT);
         },
         .RETURN => {
@@ -133,7 +135,7 @@ fn statement(self: *Compiler) CompileError!void {
                 try self._byte_code.op(.RETURN);
             } else {
                 try self.expression();
-                try self.consume(.SEMICOLON, "Expected ';'");
+                try self.consumeSemicolon();
                 try self._byte_code.op(.RETURN);
             }
         },
@@ -160,7 +162,7 @@ fn statement(self: *Compiler) CompileError!void {
         },
         else => {
             try self.expression();
-            try self.consume(.SEMICOLON, "Expected ';'");
+            try self.consumeSemicolon();
             try self._byte_code.op(.POP);
         },
     }
@@ -170,7 +172,7 @@ fn block(self: *Compiler) CompileError!void {
     while (true) {
         switch (self._current_token.value) {
             .RIGHT_BRACE => return self.advance(),
-            .EOF => return self.setError(error.UnexpectedEOF, "Expected closing block ('}')", null),
+            .EOF => return self.setExpectationError("closing block ('}}')"),
             else => try self.declaration(),
         }
     }
@@ -188,7 +190,7 @@ fn parsePrecedence(self: *Compiler, precedence: Precedence) CompileError!void {
             const can_assign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
             try prefix(self, can_assign);
         } else {
-            return self.setErrorFmt(error.ExpressionExpected, "Expected an expression for token of type '{s}'", .{@tagName(self._previous_token.value)}, null);
+            return self.setExpectationError("an expression");
         }
     }
 
@@ -274,14 +276,13 @@ fn variable(self: *Compiler, can_assign: bool) CompileError!void {
             const local = locals[idx];
             if (std.mem.eql(u8, name, local.name)) {
                 if (local.depth == null) {
-                    return self.setErrorFmt(error.UninitializedVariable, "Variable '{s}' used before being initialized", .{name}, null);
+                    return self.setErrorFmt("Variable '{s}' used before being initialized", .{name}, null);
                 }
                 break :blk idx;
             }
         }
         break :blk null;
-    } orelse return self.setErrorFmt(error.UnknownVariable, "Variable '{s}' is unknown", .{name}, null);
-
+    } orelse return self.setErrorFmt("Variable '{s}' is unknown", .{name}, null);
 
     if (can_assign and try self.match(.EQUAL)) {
         try self.expression();
@@ -291,18 +292,22 @@ fn variable(self: *Compiler, can_assign: bool) CompileError!void {
     }
 }
 
-pub fn setErrorFmt(self: *Compiler, err: CompileError, comptime fmt: []const u8, args: anytype, position: ?Position) CompileError!void {
-    const desc = try std.fmt.allocPrint(self._arena, fmt, args);
-    return self.setError(err, desc, position);
+pub fn setExpectationError(self: *Compiler, comptime message: []const u8) CompileError!void {
+    const current_token = self._current_token;
+    return self.setErrorFmt("Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) }, null);
 }
 
-pub fn setError(self: *Compiler, err: CompileError, desc: []const u8, position: ?Position) CompileError!void {
+pub fn setErrorFmt(self: *Compiler, comptime fmt: []const u8, args: anytype, position: ?Position) CompileError!void {
+    const desc = try std.fmt.allocPrint(self._arena, fmt, args);
+    return self.setError(desc, position);
+}
+
+pub fn setError(self: *Compiler, desc: []const u8, position: ?Position) CompileError!void {
     self.err = .{
-        .err = err,
         .desc = desc,
         .position = position orelse self._scanner.position(null),
     };
-    return err;
+    return error.CompileError;
 }
 
 fn invalidToken(self: *Compiler, err: anyerror, comptime desc: []const u8, token: Token) !void {
@@ -405,12 +410,11 @@ fn maxRuleIndex(comptime E: type) usize {
 }
 
 pub const Error = struct {
-    err: anyerror,
     desc: []const u8,
     position: Position,
 
     pub fn format(self: Error, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("{any}: {s}", .{self.err, self.desc});
+        return writer.print("{s}", .{self.desc});
     }
 };
 
@@ -419,14 +423,4 @@ const Local = struct {
     depth: ?usize,
 };
 
-const CompileError = error{
-    ParseError,
-    OutOfMemory,
-    CompileError,
-    TooManyErrors, // TODO: remove
-    UnexpectedToken,
-    UnexpectedEOF,
-    ExpressionExpected,
-    UnknownVariable,
-    UninitializedVariable,
-} || Scanner.ScanError;
+pub const CompileError = error{ CompileError, OutOfMemory };

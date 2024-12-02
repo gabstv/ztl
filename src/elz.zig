@@ -220,17 +220,15 @@ test "elz: variables" {
 
     try testError("Variable 'name' used before being initialized", "var name = name + 3;");
     try testError("Variable 'unknown' is unknown", "return unknown;");
+    try testError("Expected assignment operator ('='), got '`hello`' (STRING)", "var x `hello`");
 }
 
 fn testSimple(src: []const u8) lib.Value {
     var c = Compiler.init(t.allocator) catch unreachable;
     defer c.deinit();
 
-    c.compile(src) catch |err| {
-        std.debug.print("==={any}===\n", .{err});
-        if (c.err) |ce| {
-            std.debug.print("{any} - {s}\n", .{ ce.err, ce.desc });
-        }
+    c.compile(src) catch {
+        std.debug.print("Compilation error: {}\n", .{c.err.?});
         unreachable;
     };
 
@@ -252,7 +250,7 @@ fn testSimple(src: []const u8) lib.Value {
     // Values are tied to the VM, which this function will deinit
     // We need to dupe our strnig into our testing arena.
     return switch (value) {
-        .string => |str| .{.string = t.arena.allocator().dupe(u8, str) catch unreachable},
+        .string => |str| .{ .string = t.arena.allocator().dupe(u8, str) catch unreachable },
         else => value,
     };
 }
@@ -264,7 +262,7 @@ fn testError(expected: []const u8, src: []const u8) !void {
     c.compile(src) catch {
         const ce = c.err orelse unreachable;
         if (std.mem.indexOf(u8, ce.desc, expected) == null) {
-            std.debug.print("Wrong error, expected: {s} but got:\n{}\n", .{expected, ce});
+            std.debug.print("Wrong error, expected: {s} but got:\n{}\n", .{ expected, ce });
             return error.WrongError;
         }
         return;

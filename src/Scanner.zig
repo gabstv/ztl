@@ -60,23 +60,24 @@ pub fn next(self: *Scanner) !Token {
 
     while (pos < src.len) {
         const c = src[pos];
+        const start = pos;
         pos += 1;
         switch (c) {
-            '{' => return self.createSimpleToken("LEFT_BRACE"),
-            '}' => return self.createSimpleToken("RIGHT_BRACE"),
-            '[' => return self.createSimpleToken("LEFT_BRACKET"),
-            ']' => return self.createSimpleToken("RIGHT_BRACKET"),
-            '(' => return self.createSimpleToken("LEFT_PARENTHESIS"),
-            ')' => return self.createSimpleToken("RIGHT_PARENTHESIS"),
-            ',' => return self.createSimpleToken("COMMA"),
-            '.' => return self.createSimpleToken("DOT"),
-            '+' => return self.createSimpleToken("PLUS"),
-            '-' => return self.createSimpleToken("MINUS"),
-            '*' => return self.createSimpleToken("STAR"),
-            ';' => return self.createSimpleToken("SEMICOLON"),
+            '{' => return self.createSimpleToken("LEFT_BRACE", "{"),
+            '}' => return self.createSimpleToken("RIGHT_BRACE", "}"),
+            '[' => return self.createSimpleToken("LEFT_BRACKET", "["),
+            ']' => return self.createSimpleToken("RIGHT_BRACKET", "]"),
+            '(' => return self.createSimpleToken("LEFT_PARENTHESIS", "("),
+            ')' => return self.createSimpleToken("RIGHT_PARENTHESIS", ")"),
+            ',' => return self.createSimpleToken("COMMA", ","),
+            '.' => return self.createSimpleToken("DOT", "."),
+            '+' => return self.createSimpleToken("PLUS", "+"),
+            '-' => return self.createSimpleToken("MINUS", "-"),
+            '*' => return self.createSimpleToken("STAR", "*"),
+            ';' => return self.createSimpleToken("SEMICOLON", ";"),
             '/' => {
                 if (self.at(pos) != '/') {
-                    return self.createSimpleToken("SLASH");
+                    return self.createSimpleToken("SLASH", "/");
                 }
                 while (pos < src.len) {
                     if (src[pos] != '\n') {
@@ -93,30 +94,30 @@ pub fn next(self: *Scanner) !Token {
             '!' => {
                 if (self.at(pos) == '=') {
                     pos += 1;
-                    return self.createSimpleToken("BANG_EQUAL");
+                    return self.createSimpleToken("BANG_EQUAL", "!=");
                 }
-                return self.createSimpleToken("BANG");
+                return self.createSimpleToken("BANG", "!");
             },
             '=' => {
                 if (self.at(pos) == '=') {
                     pos += 1;
-                    return self.createSimpleToken("EQUAL_EQUAL");
+                    return self.createSimpleToken("EQUAL_EQUAL", "==");
                 }
-                return self.createSimpleToken("EQUAL");
+                return self.createSimpleToken("EQUAL", "=");
             },
             '>' => {
                 if (self.at(pos) == '=') {
                     pos += 1;
-                    return self.createSimpleToken("GREATER_EQUAL");
+                    return self.createSimpleToken("GREATER_EQUAL", ">=");
                 }
-                return self.createSimpleToken("GREATER");
+                return self.createSimpleToken("GREATER", ">");
             },
             '<' => {
                 if (self.at(pos) == '=') {
                     pos += 1;
-                    return self.createSimpleToken("LESSER_EQUAL");
+                    return self.createSimpleToken("LESSER_EQUAL", "<=");
                 }
-                return self.createSimpleToken("LESSER");
+                return self.createSimpleToken("LESSER", "<");
             },
             '0'...'9' => {
                 if (try self.number(&pos)) |token| {
@@ -132,15 +133,15 @@ pub fn next(self: *Scanner) !Token {
             },
             '`' => {
                 const end = std.mem.indexOfScalarPos(u8, src, pos, '`') orelse {
-                    try self.setError(error.InvalidString, "unterminated string literal");
+                    try self.setError("unterminated string literal");
                     pos = @intCast(src.len);
                     break;
                 };
-                const start = pos;
                 pos = @intCast(end + 1);
                 return .{
-                    .value = .{ .STRING = src[start..end] },
-                    .position = self.position(start - 1),
+                    .src = src[start..pos],
+                    .value = .{ .STRING = src[start + 1 .. end] },
+                    .position = self.position(start),
                 };
             },
             ' ', '\t', '\r' => self.pos = pos, // set this now so pos is right for any setError
@@ -154,11 +155,12 @@ pub fn next(self: *Scanner) !Token {
                 }
                 // else an error was recorded, keep parsing
             },
-            else => try self.setErrorFmt(error.UnexpectedCharacter, "Unexpected character: '{c}'", .{c}),
+            else => try self.setErrorFmt("Unexpected character: '{c}'", .{c}),
         }
     }
 
     return .{
+        .src = "<EOF>",
         .value = .{ .EOF = {} },
         .position = .{
             .pos = @intCast(self.src.len),
@@ -199,7 +201,7 @@ fn string(self: *Scanner, scanner_pos: *u32) !?Token {
 
     if (pos == src.len) {
         scanner_pos.* = pos;
-        try self.setError(error.InvalidString, "unterminated string literal");
+        try self.setError("unterminated string literal");
         return null;
     }
 
@@ -224,7 +226,7 @@ fn string(self: *Scanner, scanner_pos: *u32) !?Token {
                         '\'' => try scratch.append('\''),
                         else => |b| {
                             self.pos = start + i;
-                            try self.setErrorFmt(error.InvalidEscapeSequence, "invalid escape character: '{c}'", .{b});
+                            try self.setErrorFmt("invalid escape character: '{c}'", .{b});
                             return null;
                         },
                     }
@@ -241,6 +243,7 @@ fn string(self: *Scanner, scanner_pos: *u32) !?Token {
     }
 
     return .{
+        .src = src[start..scanner_pos.*],
         .value = .{ .STRING = literal },
         .position = self.position(start),
     };
@@ -268,22 +271,23 @@ fn number(self: *Scanner, scanner_pos: *u32) !?Token {
 
     if (float) {
         const value = std.fmt.parseFloat(f64, buf) catch |err| {
-            try self.setErrorFmt(error.InvalidFloat, "invalid float: {s}", .{@errorName(err)});
+            try self.setErrorFmt("invalid float: {s}", .{@errorName(err)});
             return null;
         };
 
         return .{
+            .src = buf,
             .value = .{ .FLOAT = value },
             .position = self.position(start),
         };
     }
 
     const value = std.fmt.parseInt(i64, buf, 10) catch |err| {
-        try self.setErrorFmt(error.InvalidInteger, "invalid integer: {s}", .{@errorName(err)});
+        try self.setErrorFmt("invalid integer: {s}", .{@errorName(err)});
         return null;
     };
 
-    return .{ .value = .{ .INTEGER = value }, .position = self.position(start) };
+    return .{ .src = buf, .value = .{ .INTEGER = value }, .position = self.position(start) };
 }
 
 // scanner_pos points to the first byte after whatever byte triggered this
@@ -305,39 +309,39 @@ fn identifier(self: *Scanner, scanner_pos: *u32) ?Token {
     switch (value.len) {
         2 => {
             switch (@as(u16, @bitCast(value[0..2].*))) {
-                FN_BIT => return self.createSimpleToken("FN"),
-                IF_BIT => return self.createSimpleToken("IF"),
-                OR_BIT => return self.createSimpleToken("OR"),
+                FN_BIT => return self.createSimpleToken("FN", value),
+                IF_BIT => return self.createSimpleToken("IF", value),
+                OR_BIT => return self.createSimpleToken("OR", value),
                 else => {},
             }
         },
         3 => {
             switch (@as(u24, @bitCast(value[0..3].*))) {
-                AND_BIT => return self.createSimpleToken("AND"),
-                VAR_BIT => return self.createSimpleToken("VAR"),
+                AND_BIT => return self.createSimpleToken("AND", value),
+                VAR_BIT => return self.createSimpleToken("VAR", value),
                 else => {},
             }
         },
         4 => {
             switch (@as(u32, @bitCast(value[0..4].*))) {
-                ELSE_BIT => return self.createSimpleToken("ELSE"),
-                NULL_BIT => return self.createSimpleToken("NULL"),
-                TRUE_BIT => return self.createToken(.{ .BOOLEAN = true }),
-                VOID_BIT => return self.createSimpleToken("VOID"),
+                ELSE_BIT => return self.createSimpleToken("ELSE", value),
+                NULL_BIT => return self.createSimpleToken("NULL", value),
+                TRUE_BIT => return self.createToken(.{ .BOOLEAN = true }, value),
+                VOID_BIT => return self.createSimpleToken("VOID", value),
                 else => {},
             }
         },
         5 => {
             switch (@as(u40, @bitCast(value[0..5].*))) {
-                FALSE_BIT => return self.createToken(.{ .BOOLEAN = false }),
-                WHILE_BIT => return self.createSimpleToken("WHILE"),
-                PRINT_BIT => return self.createSimpleToken("PRINT"),
+                FALSE_BIT => return self.createToken(.{ .BOOLEAN = false }, value),
+                WHILE_BIT => return self.createSimpleToken("WHILE", value),
+                PRINT_BIT => return self.createSimpleToken("PRINT", value),
                 else => {},
             }
         },
         6 => {
             switch (@as(u48, @bitCast(value[0..6].*))) {
-                RETURN_BIT => return self.createSimpleToken("RETURN"),
+                RETURN_BIT => return self.createSimpleToken("RETURN", value),
                 else => {},
             }
         },
@@ -345,17 +349,19 @@ fn identifier(self: *Scanner, scanner_pos: *u32) ?Token {
     }
 
     return .{
+        .src = value,
         .value = .{ .IDENTIFIER = value },
         .position = self.position(start),
     };
 }
 
-fn createSimpleToken(self: *Scanner, comptime token_type: []const u8) Token {
-    return self.createToken(@unionInit(Token.Value, token_type, {}));
+fn createSimpleToken(self: *Scanner, comptime token_type: []const u8, src: []const u8) Token {
+    return self.createToken(@unionInit(Token.Value, token_type, {}), src);
 }
 
-fn createToken(self: *Scanner, value: Token.Value) Token {
+fn createToken(self: *Scanner, value: Token.Value, src: []const u8) Token {
     return .{
+        .src = src,
         .value = value,
         .position = self.position(null),
     };
@@ -373,26 +379,13 @@ pub fn srcAt(self: *const Scanner, p: Position) []const u8 {
     return self.src[p.pos..self.pos];
 }
 
-fn setErrorFmt(self: *Scanner, err: ScanError, comptime fmt: []const u8, args: anytype) ScanError!void {
-    return self.compiler.setErrorFmt(err, fmt, args, self.position(null)) catch |ce| switch (ce) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return err,
-    };
+fn setErrorFmt(self: *Scanner, comptime fmt: []const u8, args: anytype) Compiler.CompileError!void {
+    return self.compiler.setErrorFmt(fmt, args, self.position(null));
 }
 
-fn setError(self: *Scanner, err: ScanError, desc: []const u8) !void {
-    self.compiler.setError(err, desc, self.position(null)) catch {};
-    return err;
+fn setError(self: *Scanner, desc: []const u8) Compiler.CompileError!void {
+    return self.compiler.setError(desc, self.position(null)) catch {};
 }
-
-pub const ScanError = error{
-    OutOfMemory,
-    InvalidString,
-    InvalidEscapeSequence,
-    InvalidFloat,
-    InvalidInteger,
-    UnexpectedCharacter,
-};
 
 const t = @import("t.zig");
 test "scanner: empty" {
@@ -453,9 +446,9 @@ test "scanner: string literals" {
     });
 
     {
-        try expectError(" \"abc 123", .{ .err = error.InvalidString, .pos = 1, .line = 1, .line_start = 0, .desc = "unterminated string literal" });
-        try expectError("\"ab\\\"", .{ .err = error.InvalidString, .pos = 0, .line = 1, .line_start = 0, .desc = "unterminated string literal" });
-        try expectError(" \"   \\a \" ", .{ .err = error.InvalidEscapeSequence, .pos = 6, .line = 1, .line_start = 0, .desc = "invalid escape character: 'a'" });
+        try expectError(" \"abc 123", .{ .pos = 1, .line = 1, .line_start = 0, .desc = "unterminated string literal" });
+        try expectError("\"ab\\\"", .{ .pos = 0, .line = 1, .line_start = 0, .desc = "unterminated string literal" });
+        try expectError(" \"   \\a \" ", .{ .pos = 6, .line = 1, .line_start = 0, .desc = "invalid escape character: 'a'" });
     }
 
     try expectTokens("``", &.{.{ .STRING = "" }});
@@ -494,7 +487,7 @@ test "scanner: numeric literals" {
         .{ .FLOAT = 49.2291 },
     });
 
-    try expectError(" \n 1.2.3", .{ .err = error.InvalidFloat, .pos = 3, .line = 2, .line_start = 2, .desc = "invalid float: InvalidCharacter" });
+    try expectError(" \n 1.2.3", .{ .pos = 3, .line = 2, .line_start = 2, .desc = "invalid float: InvalidCharacter" });
 }
 
 test "scanner: identifier" {
@@ -548,7 +541,7 @@ test "scanner: misc" {
 }
 
 test "scanner: errors" {
-    try expectError("~", .{ .err = error.UnexpectedCharacter, .pos = 0, .line = 1, .line_start = 0, .desc = "Unexpected character: '~'" });
+    try expectError("~", .{ .pos = 0, .line = 1, .line_start = 0, .desc = "Unexpected character: '~'" });
 }
 
 fn expectTokens(src: []const u8, expected: []const Token.Value) !void {
@@ -577,15 +570,11 @@ fn expectError(src: []const u8, expected: ExpectedError) !void {
     var scanner = Scanner.init(&compiler, src);
 
     while (true) {
-        const token = scanner.next() catch |err| {
-            try t.expectEqual(expected.err, err);
-            break;
-        };
+        const token = scanner.next() catch break;
         if (token.value == .EOF) break;
     }
 
     const ce = compiler.err orelse return error.NoError;
-    try t.expectEqual(expected.err, ce.err);
     try t.expectString(expected.desc, ce.desc);
 
     try t.expectEqual(expected.pos, ce.position.pos);
@@ -594,7 +583,6 @@ fn expectError(src: []const u8, expected: ExpectedError) !void {
 }
 
 const ExpectedError = struct {
-    err: anyerror,
     desc: []const u8,
     pos: u32,
     line: u32,

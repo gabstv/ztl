@@ -29,7 +29,7 @@ pub fn op(self: *ByteCode, op_code: OpCode) !void {
 }
 
 pub fn op2(self: *ByteCode, op_code1: OpCode, op_code2: OpCode) !void {
-     return self.code.write(self.allocator, &.{@intFromEnum(op_code1), @intFromEnum(op_code2)});
+    return self.code.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
 }
 
 pub fn @"i64"(self: *ByteCode, value: i64) !void {
