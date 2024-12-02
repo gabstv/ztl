@@ -57,7 +57,7 @@ pub const Position = struct {
     // the line is at pos - line_start
     line_start: u32,
 
-    pub const ZERO = Position{.pos = 0, .line = 0, .line_start = 0};
+    pub const ZERO = Position{ .pos = 0, .line = 0, .line_start = 0 };
 };
 
 pub const OpCode = enum(u8) {
@@ -69,12 +69,16 @@ pub const OpCode = enum(u8) {
     CONSTANT_STRING,
     DIVIDE,
     EQUAL,
+    GET_LOCAL,
     GREATER,
     LESSER,
     MULTIPLY,
     NEGATE,
     NOT,
+    POP,
+    PRINT,
     RETURN,
+    SET_LOCAL,
     SUBTRACT,
 };
 

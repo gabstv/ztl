@@ -20,6 +20,7 @@ const TRUE_BIT = @as(u32, @bitCast([4]u8{ 't', 'r', 'u', 'e' }));
 const VAR_BIT = @as(u24, @bitCast([3]u8{ 'v', 'a', 'r' }));
 const VOID_BIT = @as(u32, @bitCast([4]u8{ 'v', 'o', 'i', 'd' }));
 const WHILE_BIT = @as(u40, @bitCast([5]u8{ 'w', 'h', 'i', 'l', 'e' }));
+const PRINT_BIT = @as(u40, @bitCast([5]u8{ 'p', 'r', 'i', 'n', 't' }));
 
 const Scanner = @This();
 
@@ -39,7 +40,7 @@ pos: u32 = 0,
 // the source that we're scanning
 src: []const u8,
 
-// We only have this so that we can call compiler.addError (or some variant).
+// We only have this so that we can call compiler.setError.
 // There's probably a better design than referencing the whole compiler, but
 // this is all internal details and it works, so...
 compiler: *Compiler,
@@ -131,18 +132,18 @@ pub fn next(self: *Scanner) !Token {
             },
             '`' => {
                 const end = std.mem.indexOfScalarPos(u8, src, pos, '`') orelse {
-                    try self.addError(error.InvalidString, "unterminated string literal");
+                    try self.setError(error.InvalidString, "unterminated string literal");
                     pos = @intCast(src.len);
                     break;
                 };
                 const start = pos;
                 pos = @intCast(end + 1);
                 return .{
-                    .value = .{.STRING = src[start..end]},
+                    .value = .{ .STRING = src[start..end] },
                     .position = self.position(start - 1),
                 };
             },
-            ' ', '\t', '\r' => self.pos = pos, // set this now so pos is right for any addError
+            ' ', '\t', '\r' => self.pos = pos, // set this now so pos is right for any setError
             '\n' => {
                 self.line += 1;
                 self.line_start = pos;
@@ -153,12 +154,12 @@ pub fn next(self: *Scanner) !Token {
                 }
                 // else an error was recorded, keep parsing
             },
-            else => try self.addErrorFmt(error.UnexpectedCharacter, "Unexpected character: '{c}'", .{c}),
+            else => try self.setErrorFmt(error.UnexpectedCharacter, "Unexpected character: '{c}'", .{c}),
         }
     }
 
     return .{
-        .value = .{.EOF = {}},
+        .value = .{ .EOF = {} },
         .position = .{
             .pos = @intCast(self.src.len),
             .line = self.line,
@@ -198,7 +199,7 @@ fn string(self: *Scanner, scanner_pos: *u32) !?Token {
 
     if (pos == src.len) {
         scanner_pos.* = pos;
-        try self.addError(error.InvalidString, "unterminated string literal");
+        try self.setError(error.InvalidString, "unterminated string literal");
         return null;
     }
 
@@ -223,7 +224,7 @@ fn string(self: *Scanner, scanner_pos: *u32) !?Token {
                         '\'' => try scratch.append('\''),
                         else => |b| {
                             self.pos = start + i;
-                            try self.addErrorFmt(error.InvalidEscapeSequence, "invalid escape character: '{c}'", .{b});
+                            try self.setErrorFmt(error.InvalidEscapeSequence, "invalid escape character: '{c}'", .{b});
                             return null;
                         },
                     }
@@ -240,7 +241,7 @@ fn string(self: *Scanner, scanner_pos: *u32) !?Token {
     }
 
     return .{
-        .value = .{.STRING = literal},
+        .value = .{ .STRING = literal },
         .position = self.position(start),
     };
 }
@@ -267,25 +268,22 @@ fn number(self: *Scanner, scanner_pos: *u32) !?Token {
 
     if (float) {
         const value = std.fmt.parseFloat(f64, buf) catch |err| {
-            try self.addErrorFmt(error.InvalidFloat, "invalid float: {s}", .{@errorName(err)});
+            try self.setErrorFmt(error.InvalidFloat, "invalid float: {s}", .{@errorName(err)});
             return null;
         };
 
         return .{
-            .value = .{.FLOAT = value},
-            .position = self.position(start) ,
+            .value = .{ .FLOAT = value },
+            .position = self.position(start),
         };
     }
 
     const value = std.fmt.parseInt(i64, buf, 10) catch |err| {
-        try self.addErrorFmt(error.InvalidInteger, "invalid integer: {s}", .{@errorName(err)});
+        try self.setErrorFmt(error.InvalidInteger, "invalid integer: {s}", .{@errorName(err)});
         return null;
     };
 
-    return .{
-        .value = .{.INTEGER = value },
-        .position = self.position(start)
-    };
+    return .{ .value = .{ .INTEGER = value }, .position = self.position(start) };
 }
 
 // scanner_pos points to the first byte after whatever byte triggered this
@@ -324,15 +322,16 @@ fn identifier(self: *Scanner, scanner_pos: *u32) ?Token {
             switch (@as(u32, @bitCast(value[0..4].*))) {
                 ELSE_BIT => return self.createSimpleToken("ELSE"),
                 NULL_BIT => return self.createSimpleToken("NULL"),
-                TRUE_BIT => return self.createToken(.{.BOOLEAN = true}),
+                TRUE_BIT => return self.createToken(.{ .BOOLEAN = true }),
                 VOID_BIT => return self.createSimpleToken("VOID"),
                 else => {},
             }
         },
         5 => {
             switch (@as(u40, @bitCast(value[0..5].*))) {
-                FALSE_BIT => return self.createToken(.{.BOOLEAN = false}),
+                FALSE_BIT => return self.createToken(.{ .BOOLEAN = false }),
                 WHILE_BIT => return self.createSimpleToken("WHILE"),
+                PRINT_BIT => return self.createSimpleToken("PRINT"),
                 else => {},
             }
         },
@@ -374,13 +373,26 @@ pub fn srcAt(self: *const Scanner, p: Position) []const u8 {
     return self.src[p.pos..self.pos];
 }
 
-fn addErrorFmt(self: *Scanner, err: anyerror, comptime fmt: []const u8, args: anytype) !void {
-    return self.compiler.addErrorFmt(err, fmt, args, self.position(null));
+fn setErrorFmt(self: *Scanner, err: ScanError, comptime fmt: []const u8, args: anytype) ScanError!void {
+    return self.compiler.setErrorFmt(err, fmt, args, self.position(null)) catch |ce| switch (ce) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return err,
+    };
 }
 
-fn addError(self: *Scanner, err: anyerror, desc: []const u8) !void {
-    return self.compiler.addError(err, desc, self.position(null));
+fn setError(self: *Scanner, err: ScanError, desc: []const u8) !void {
+    self.compiler.setError(err, desc, self.position(null)) catch {};
+    return err;
 }
+
+pub const ScanError = error{
+    OutOfMemory,
+    InvalidString,
+    InvalidEscapeSequence,
+    InvalidFloat,
+    InvalidInteger,
+    UnexpectedCharacter,
+};
 
 const t = @import("t.zig");
 test "scanner: empty" {
@@ -392,137 +404,123 @@ test "scanner: empty" {
 
 test "scanner: simple tokens" {
     try expectTokens(" { /  } [ ]\t (\t\t\r),.-+*;", &.{
-        .{.LEFT_BRACE = {}},
-        .{.SLASH = {}},
-        .{.RIGHT_BRACE = {}},
-        .{.LEFT_BRACKET = {}},
-        .{.RIGHT_BRACKET = {}},
-        .{.LEFT_PARENTHESIS = {}},
-        .{.RIGHT_PARENTHESIS = {}},
-        .{.COMMA = {}},
-        .{.DOT = {}},
-        .{.MINUS = {}},
-        .{.PLUS = {}},
-        .{.STAR = {}},
-        .{.SEMICOLON = {}},
+        .{ .LEFT_BRACE = {} },
+        .{ .SLASH = {} },
+        .{ .RIGHT_BRACE = {} },
+        .{ .LEFT_BRACKET = {} },
+        .{ .RIGHT_BRACKET = {} },
+        .{ .LEFT_PARENTHESIS = {} },
+        .{ .RIGHT_PARENTHESIS = {} },
+        .{ .COMMA = {} },
+        .{ .DOT = {} },
+        .{ .MINUS = {} },
+        .{ .PLUS = {} },
+        .{ .STAR = {} },
+        .{ .SEMICOLON = {} },
     });
 }
 
 test "scanner: multibyte tokens" {
     try expectTokens("><! = == != >=\t<= ", &.{
-        .{.GREATER = {}},
-        .{.LESSER = {}},
-        .{.BANG = {}},
-        .{.EQUAL = {}},
-        .{.EQUAL_EQUAL = {}},
-        .{.BANG_EQUAL = {}},
-        .{.GREATER_EQUAL = {}},
-        .{.LESSER_EQUAL = {}},
+        .{ .GREATER = {} },
+        .{ .LESSER = {} },
+        .{ .BANG = {} },
+        .{ .EQUAL = {} },
+        .{ .EQUAL_EQUAL = {} },
+        .{ .BANG_EQUAL = {} },
+        .{ .GREATER_EQUAL = {} },
+        .{ .LESSER_EQUAL = {} },
     });
 }
 
 test "scanner: string literals" {
-
-    try expectTokens("\"\"", &.{
-        .{.STRING = ""}
-    });
+    try expectTokens("\"\"", &.{.{ .STRING = "" }});
 
     try expectTokens("\"hello world\" == \"Goodbye moon\"", &.{
-        .{.STRING = "hello world"},
-        .{.EQUAL_EQUAL = {}},
-        .{.STRING = "Goodbye moon"},
+        .{ .STRING = "hello world" },
+        .{ .EQUAL_EQUAL = {} },
+        .{ .STRING = "Goodbye moon" },
     });
 
-    try expectTokens("\" \\n \\r \\t \\\" \\' \\\\ \"", &.{
-        .{.STRING = " \n \r \t \" ' \\ "}
-    });
+    try expectTokens("\" \\n \\r \\t \\\" \\' \\\\ \"", &.{.{ .STRING = " \n \r \t \" ' \\ " }});
 
-    try expectTokens("\"\\'\"", &.{
-        .{.STRING = "'"}
-    });
+    try expectTokens("\"\\'\"", &.{.{ .STRING = "'" }});
 
     try expectTokens("\"abc\"  +  \"123\\'x\"", &.{
-        .{.STRING = "abc"},
-        .{.PLUS = {}},
-        .{.STRING = "123'x"},
+        .{ .STRING = "abc" },
+        .{ .PLUS = {} },
+        .{ .STRING = "123'x" },
     });
 
     {
-        try expectErrors(" \"abc 123", &.{.{ .err = error.InvalidString, .pos = 1, .line = 1, .line_start = 0, .desc = "unterminated string literal" }});
-        try expectErrors("\"ab\\\"", &.{.{ .err = error.InvalidString, .pos = 0, .line = 1, .line_start = 0, .desc = "unterminated string literal" }});
-        try expectErrors(" \"   \\a \" ", &.{.{ .err = error.InvalidEscapeSequence, .pos = 6, .line = 1, .line_start = 0, .desc = "invalid escape character: 'a'" }});
+        try expectError(" \"abc 123", .{ .err = error.InvalidString, .pos = 1, .line = 1, .line_start = 0, .desc = "unterminated string literal" });
+        try expectError("\"ab\\\"", .{ .err = error.InvalidString, .pos = 0, .line = 1, .line_start = 0, .desc = "unterminated string literal" });
+        try expectError(" \"   \\a \" ", .{ .err = error.InvalidEscapeSequence, .pos = 6, .line = 1, .line_start = 0, .desc = "invalid escape character: 'a'" });
     }
 
-    try expectTokens("``", &.{
-        .{.STRING = ""}
-    });
+    try expectTokens("``", &.{.{ .STRING = "" }});
 
-    try expectTokens("`hello world`", &.{
-        .{.STRING = "hello world"}
-    });
+    try expectTokens("`hello world`", &.{.{ .STRING = "hello world" }});
 
-    try expectTokens("`hello\"world`", &.{
-        .{.STRING = "hello\"world"}
-    });
+    try expectTokens("`hello\"world`", &.{.{ .STRING = "hello\"world" }});
 
     try expectTokens("`hel\\nlo` `world`", &.{
-        .{.STRING = "hel\\nlo"},
-        .{.STRING = "world"},
+        .{ .STRING = "hel\\nlo" },
+        .{ .STRING = "world" },
     });
 }
 
 test "scanner: numeric literals" {
-
     try expectTokens("0 1 84 581 12348 893819838298 377178209854757", &.{
-        .{.INTEGER = 0},
-        .{.INTEGER = 1},
-        .{.INTEGER = 84},
-        .{.INTEGER = 581},
-        .{.INTEGER = 12348},
-        .{.INTEGER = 893819838298},
-        .{.INTEGER = 377178209854757},
+        .{ .INTEGER = 0 },
+        .{ .INTEGER = 1 },
+        .{ .INTEGER = 84 },
+        .{ .INTEGER = 581 },
+        .{ .INTEGER = 12348 },
+        .{ .INTEGER = 893819838298 },
+        .{ .INTEGER = 377178209854757 },
     });
 
     try expectTokens("-581", &.{
-        .{.MINUS = {}},
-        .{.INTEGER = 581},
+        .{ .MINUS = {} },
+        .{ .INTEGER = 581 },
     });
 
     try expectTokens("1.1 3.14159 0.399132785 -49.2291", &.{
-        .{.FLOAT = 1.1},
-        .{.FLOAT = 3.14159},
-        .{.FLOAT = 0.399132785},
-        .{.MINUS = {}},
-        .{.FLOAT = 49.2291},
+        .{ .FLOAT = 1.1 },
+        .{ .FLOAT = 3.14159 },
+        .{ .FLOAT = 0.399132785 },
+        .{ .MINUS = {} },
+        .{ .FLOAT = 49.2291 },
     });
 
-    try expectErrors(" \n 1.2.3", &.{.{ .err = error.InvalidFloat, .pos = 3, .line = 2, .line_start = 2, .desc = "invalid float: InvalidCharacter" }});
+    try expectError(" \n 1.2.3", .{ .err = error.InvalidFloat, .pos = 3, .line = 2, .line_start = 2, .desc = "invalid float: InvalidCharacter" });
 }
 
 test "scanner: identifier" {
     try expectTokens("cat _VAR hello_world ice9 I9c__302_nadudDD___", &.{
-        .{.IDENTIFIER = "cat"},
-        .{.IDENTIFIER = "_VAR"},
-        .{.IDENTIFIER = "hello_world"},
-        .{.IDENTIFIER = "ice9"},
-        .{.IDENTIFIER = "I9c__302_nadudDD___"},
+        .{ .IDENTIFIER = "cat" },
+        .{ .IDENTIFIER = "_VAR" },
+        .{ .IDENTIFIER = "hello_world" },
+        .{ .IDENTIFIER = "ice9" },
+        .{ .IDENTIFIER = "I9c__302_nadudDD___" },
     });
 }
 
 test "scanner: keyword" {
     try expectTokens("and else false fn if null or return true var void while", &.{
-        .{.AND = {}},
-        .{.ELSE = {}},
-        .{.BOOLEAN = false},
-        .{.FN = {}},
-        .{.IF = {}},
-        .{.NULL = {}},
-        .{.OR = {}},
-        .{.RETURN = {}},
-        .{.BOOLEAN = true},
-        .{.VAR = {}},
-        .{.VOID = {}},
-        .{.WHILE = {}},
+        .{ .AND = {} },
+        .{ .ELSE = {} },
+        .{ .BOOLEAN = false },
+        .{ .FN = {} },
+        .{ .IF = {} },
+        .{ .NULL = {} },
+        .{ .OR = {} },
+        .{ .RETURN = {} },
+        .{ .BOOLEAN = true },
+        .{ .VAR = {} },
+        .{ .VOID = {} },
+        .{ .WHILE = {} },
     });
 }
 
@@ -534,23 +532,23 @@ test "scanner: comments" {
             \\ >  // should this be >= ?
             \\ 1.1
         , &.{
-            .{.FLOAT = 1.2},
-            .{.GREATER = {}},
-            .{.FLOAT = 1.1},
+            .{ .FLOAT = 1.2 },
+            .{ .GREATER = {} },
+            .{ .FLOAT = 1.1 },
         });
     }
 }
 
 test "scanner: misc" {
     try expectTokens("cat == 9", &.{
-        .{.IDENTIFIER = "cat"},
-        .{.EQUAL_EQUAL = {}},
-        .{.INTEGER = 9},
+        .{ .IDENTIFIER = "cat" },
+        .{ .EQUAL_EQUAL = {} },
+        .{ .INTEGER = 9 },
     });
 }
 
 test "scanner: errors" {
-    try expectErrors("~", &.{.{ .err = error.UnexpectedCharacter, .pos = 0, .line = 1, .line_start = 0, .desc = "Unexpected character: '~'" }});
+    try expectError("~", .{ .err = error.UnexpectedCharacter, .pos = 0, .line = 1, .line_start = 0, .desc = "Unexpected character: '~'" });
 }
 
 fn expectTokens(src: []const u8, expected: []const Token.Value) !void {
@@ -572,26 +570,27 @@ fn expectTokens(src: []const u8, expected: []const Token.Value) !void {
     try t.expectEqual(.EOF, last.value);
 }
 
-fn expectErrors(src: []const u8, expected: []const ExpectedError) !void {
+fn expectError(src: []const u8, expected: ExpectedError) !void {
     var compiler = try Compiler.init(t.allocator);
     defer compiler.deinit();
 
     var scanner = Scanner.init(&compiler, src);
 
     while (true) {
-        const token = try scanner.next();
+        const token = scanner.next() catch |err| {
+            try t.expectEqual(expected.err, err);
+            break;
+        };
         if (token.value == .EOF) break;
     }
 
-    const actuals = compiler.errors();
-    for (expected, actuals) |e, a| {
-        try t.expectEqual(e.err, a.err);
-        try t.expectString(e.desc, a.desc);
+    const ce = compiler.err orelse return error.NoError;
+    try t.expectEqual(expected.err, ce.err);
+    try t.expectString(expected.desc, ce.desc);
 
-        try t.expectEqual(e.pos, a.position.pos);
-        try t.expectEqual(e.line, a.position.line);
-        try t.expectEqual(e.line_start, a.position.line_start);
-    }
+    try t.expectEqual(expected.pos, ce.position.pos);
+    try t.expectEqual(expected.line, ce.position.line);
+    try t.expectEqual(expected.line_start, ce.position.line_start);
 }
 
 const ExpectedError = struct {

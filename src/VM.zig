@@ -66,6 +66,16 @@ pub fn run(self: *VM, byte_code: []const u8) !Value {
                 self.push(.{ .string = data[string_start..string_end] });
             },
             .CONSTANT_NULL => self.push(.{ .null = {} }),
+            .GET_LOCAL => {
+                const idx = ip[0];
+                ip += 1;
+                self.push(self._stack[idx]);
+            },
+            .SET_LOCAL => {
+                const idx = ip[0];
+                ip += 1;
+                self._stack[idx] = (self._stack_pointer - 1)[0];
+            },
             .ADD => try self.arithmetic(&add),
             .SUBTRACT => try self.arithmetic(&subtract),
             .MULTIPLY => try self.arithmetic(&multiply),
@@ -88,6 +98,8 @@ pub fn run(self: *VM, byte_code: []const u8) !Value {
             .EQUAL => try self.comparison(&equal),
             .GREATER => try self.comparison(&greater),
             .LESSER => try self.comparison(&lesser),
+            .PRINT => std.debug.print("{}\n", .{self.pop()}),
+            .POP => _ = self.pop(),
             .RETURN => return self.pop(),
         }
     }
@@ -194,7 +206,7 @@ fn comparison(self: *VM, operation: *const fn (self: *VM, left: Value, right: Va
     self._stack_pointer -= 1;
     const ptr = self.values();
     const result = try operation(self, ptr[0], ptr[1]);
-    ptr[0] = .{.bool = result};
+    ptr[0] = .{ .bool = result };
 }
 
 fn equal(self: *VM, left: Value, right: Value) anyerror!bool {

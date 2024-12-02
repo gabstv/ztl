@@ -7,8 +7,6 @@ const Position = lib.Position;
 const ByteCode = lib.ByteCode;
 const Allocator = std.mem.Allocator;
 
-const MAX_ERRORS = 20;
-
 const Compiler = @This();
 
 // the ByteCode that our compiler is generating
@@ -19,16 +17,20 @@ _byte_code: ByteCode,
 // Their main goal is for generating errors.
 _arena: Allocator,
 
-_errors: [MAX_ERRORS]Error = undefined,
-
-// number of errors in _errors
-_error_len: usize = 0,
+err: ?Error = null,
 
 // will be set when compile() is called
 _scanner: Scanner = undefined,
 
+// we just need to keep track of our current token and the
+// previous token to successfully parsed.
 _current_token: Token,
 _previous_token: Token,
+
+// used to track local variables
+_locals: []Local,
+_scope_depth: usize = 0,
+_local_count: usize = 0,
 
 pub fn init(allocator: Allocator) !Compiler {
     const arena = try allocator.create(std.heap.ArenaAllocator);
@@ -37,11 +39,14 @@ pub fn init(allocator: Allocator) !Compiler {
     arena.* = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
+    const aa = arena.allocator();
+
     return .{
-        ._arena = arena.allocator(),
-        ._byte_code = try ByteCode.init(arena.allocator()),
-        ._current_token = .{.value = .{.START = {}}, .position = Position.ZERO},
-        ._previous_token = .{.value = .{.START = {}}, .position = Position.ZERO},
+        ._arena = aa,
+        ._locals = try aa.alloc(Local, 10),
+        ._byte_code = try ByteCode.init(aa),
+        ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO },
+        ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO },
     };
 }
 
@@ -51,37 +56,18 @@ pub fn deinit(self: *const Compiler) void {
     arena.child_allocator.destroy(arena);
 }
 
-pub fn errors(self: *const Compiler) []const Error {
-    return self._errors[0..self._error_len];
-}
-
-pub fn compile(self: *Compiler, src: []const u8) !void{
-    self._scanner = Scanner.init(self, src);
-    try self.advance();
-    try self.expression();
-    try self.consume(.EOF, "Expected of of expression");
-
-    const byte_code = &self._byte_code;
-    try byte_code.addOp(.RETURN);
-    if (self._error_len > 0) {
-        return error.CompilationFailed;
-    }
-}
-
 pub fn byteCode(self: *const Compiler, allocator: Allocator) ![]const u8 {
-    const code = self._byte_code.code;
-    const data = self._byte_code.data;
+    return self._byte_code.toBytes(allocator);
+}
 
-    const buf = try allocator.alloc(u8, 4 + code.pos + data.pos);
+pub fn compile(self: *Compiler, src: []const u8) CompileError!void {
+    self._scanner = Scanner.init(self, src);
 
-    const data_start = 4 + code.pos;
-    const code_len: u32 = @intCast(code.pos);
+    try self.advance();
 
-    @memcpy(buf[0..4], std.mem.asBytes(&code_len));
-    @memcpy(buf[4..data_start], code.buf[0..code.pos]);
-    @memcpy(buf[data_start..], data.buf[0..data.pos]);
-
-    return buf;
+    while (try self.match(.EOF) == false) {
+        try self.declaration();
+    }
 }
 
 fn advance(self: *Compiler) !void {
@@ -91,89 +77,114 @@ fn advance(self: *Compiler) !void {
 
 fn consume(self: *Compiler, expected: Token.Type, comptime message: []const u8) !void {
     if (self._current_token.value != expected) {
-        return self.addErrorFmt(error.UnexpectedToken, message ++ ", got '{s}'", .{@tagName(expected)}, null);
+        return self.setErrorFmt(error.UnexpectedToken, message ++ ", got '{s}'", .{@tagName(self._current_token.value)}, null);
     }
     return self.advance();
 }
 
-fn expression(self: *Compiler) !void {
+fn match(self: *Compiler, expected: Token.Type) !bool {
+    if (self._current_token.value != expected) {
+        return false;
+    }
+    try self.advance();
+    return true;
+}
+
+fn declaration(self: *Compiler) CompileError!void {
+    switch (self._current_token.value) {
+        .VAR => {
+            try self.advance();
+            try self.consume(.IDENTIFIER, "Expected variable name");
+
+            const variable_name = self._previous_token.value.IDENTIFIER;
+            // TODO: check self._locals for a variable with the same name
+            // in the same scope. Start at _locals[_local_count - 1] and work
+            // backwards, until we find a conflict, or the scope chang
+            const lc = self._local_count;
+            self._locals[lc] = .{
+                .name = variable_name,
+                .depth = self._scope_depth,
+            };
+            self._local_count = lc + 1;
+
+            try self.consume(.EQUAL, "Expected assignment operator ('=')");
+            try self.expression();
+            try self.consume(.SEMICOLON, "Expected ';'");
+        },
+        else => return self.statement(),
+    }
+}
+
+fn statement(self: *Compiler) CompileError!void {
+    switch (self._current_token.value) {
+        .PRINT => {
+            try self.advance();
+            try self.expression();
+            try self.consume(.SEMICOLON, "Expected ';'");
+            try self._byte_code.op(.PRINT);
+        },
+        .RETURN => {
+            try self.advance();
+            if (try self.match(.SEMICOLON)) {
+                try self._byte_code.op(.RETURN);
+            } else {
+                try self.expression();
+                try self.consume(.SEMICOLON, "Expected ';'");
+                try self._byte_code.op(.RETURN);
+            }
+        },
+        .LEFT_BRACE => {
+            try self.advance();
+            const scope = self._scope_depth;
+            self._scope_depth = scope + 1;
+            try self.block();
+            self._scope_depth = scope;
+
+            // pop up any locals from this scope
+            const locals = self._locals;
+            var i = self._local_count - 1;
+            while (i >= 0) : (i -= 1) {
+                if (locals[i].depth > scope) {
+                    try self._byte_code.op(.POP);
+                } else {
+                    self._local_count = i + 1;
+                    break;
+                }
+            } else {
+                self._local_count = 0;
+            }
+        },
+        else => {
+            try self.expression();
+            try self.consume(.SEMICOLON, "Expected ';'");
+            try self._byte_code.op(.POP);
+        },
+    }
+}
+
+fn block(self: *Compiler) CompileError!void {
+    while (true) {
+        switch (self._current_token.value) {
+            .RIGHT_BRACE => return self.advance(),
+            .EOF => return self.setError(error.UnexpectedEOF, "Expected closing block ('}')", null),
+            else => try self.declaration(),
+        }
+    }
+}
+
+fn expression(self: *Compiler) CompileError!void {
     return self.parsePrecedence(.ASSIGNMENT);
 }
 
-fn grouping(self: *Compiler) !void {
-    try self.expression();
-    return self.consume(.RIGHT_PARENTHESIS, "Expected closing parathesis ')'");
-}
-
-fn unary(self: *Compiler) !void {
-    const previous = self._previous_token.value;
-
-    try self.expression();
-    switch (previous) {
-        .BANG => try self._byte_code.addOp(.NOT),
-        .MINUS => try self._byte_code.addOp(.NEGATE),
-        else => unreachable,
-    }
-}
-
-fn binary(self: *Compiler) !void {
-    const previous = self._previous_token.value;
-    const rule = getRule(previous);
-    try self.parsePrecedence(@enumFromInt(rule.precedence + 1));
-
-    switch (previous) {
-        .PLUS => try self._byte_code.addOp(.ADD),
-        .MINUS => try self._byte_code.addOp(.SUBTRACT),
-        .STAR => try self._byte_code.addOp(.MULTIPLY),
-        .SLASH => try self._byte_code.addOp(.DIVIDE),
-        .EQUAL_EQUAL => try self._byte_code.addOp(.EQUAL),
-        .BANG_EQUAL => try self._byte_code.addOp2(.EQUAL, .NOT),
-        .GREATER => try self._byte_code.addOp(.GREATER),
-        .GREATER_EQUAL => try self._byte_code.addOp2(.LESSER, .NOT),
-        .LESSER => try self._byte_code.addOp(.LESSER),
-        .LESSER_EQUAL => try self._byte_code.addOp2(.GREATER, .NOT),
-        else => unreachable,
-    }
-}
-
-fn literal(self: *Compiler, token: Token) !void {
-    switch (token) {
-        .INTEGER => |value| try self._byte_code.addI64(value),
-        .FLOAT => |value| try self._byte_code.addF64(value),
-        .BOOL => |value| try self._byte_code.addBool(value),
-        .NULL => try self._byte_code.addNull(),
-        .STRING => unreachable,
-    }
-}
-
-fn number(self: *Compiler) !void {
-    switch (self._previous_token.value) {
-        .INTEGER => |value| try self._byte_code.addI64(value),
-        .FLOAT => |value| try self._byte_code.addF64(value),
-        else => unreachable,
-    }
-}
-
-fn boolean(self: *Compiler) !void {
-    return self._byte_code.addBool(self._previous_token.value.BOOLEAN);
-}
-
-fn string(self: *Compiler) !void {
-    return self._byte_code.addString(self._previous_token.value.STRING);
-}
-
-fn @"null"(self: *Compiler) !void {
-    return self._byte_code.addNull();
-}
-
-fn parsePrecedence(self: *Compiler, precedence: Precedence) !void {
+fn parsePrecedence(self: *Compiler, precedence: Precedence) CompileError!void {
     try self.advance();
     {
         const rule = getRule(self._previous_token.value);
         if (rule.prefix) |prefix| {
-            try prefix(self);
+            const can_assign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
+            try prefix(self, can_assign);
         } else {
-            return self.addErrorFmt(error.ExpressionExpected, "Expected an expression for token of type '{s}'", .{@tagName(self._previous_token.value)}, null);
+            return self.setErrorFmt(error.ExpressionExpected, "Expected an expression for token of type '{s}'", .{@tagName(self._previous_token.value)}, null);
         }
     }
 
@@ -188,32 +199,99 @@ fn parsePrecedence(self: *Compiler, precedence: Precedence) !void {
     }
 }
 
-pub fn addErrorFmt(self: *Compiler, err: anyerror, comptime fmt: []const u8, args: anytype, position: ?Position) !void {
-    const error_index = self._error_len;
-    if (error_index == MAX_ERRORS) {
-        return error.TooManyErrors;
-    }
-    const desc = try std.fmt.allocPrint(self._arena, fmt, args);
-    return self.addError(err, desc, position);
+fn grouping(self: *Compiler, _: bool) CompileError!void {
+    try self.expression();
+    return self.consume(.RIGHT_PARENTHESIS, "Expected closing parathesis ')'");
 }
 
-pub fn addError(self: *Compiler, err: anyerror, desc: []const u8, position: ?Position) !void {
-    const len = self._error_len;
-    if (len == MAX_ERRORS) {
-        return error.TooManyErrors;
+fn binary(self: *Compiler) CompileError!void {
+    const previous = self._previous_token.value;
+    const rule = getRule(previous);
+    try self.parsePrecedence(@enumFromInt(rule.precedence + 1));
+
+    switch (previous) {
+        .PLUS => try self._byte_code.op(.ADD),
+        .MINUS => try self._byte_code.op(.SUBTRACT),
+        .STAR => try self._byte_code.op(.MULTIPLY),
+        .SLASH => try self._byte_code.op(.DIVIDE),
+        .EQUAL_EQUAL => try self._byte_code.op(.EQUAL),
+        .BANG_EQUAL => try self._byte_code.op2(.EQUAL, .NOT),
+        .GREATER => try self._byte_code.op(.GREATER),
+        .GREATER_EQUAL => try self._byte_code.op2(.LESSER, .NOT),
+        .LESSER => try self._byte_code.op(.LESSER),
+        .LESSER_EQUAL => try self._byte_code.op2(.GREATER, .NOT),
+        else => unreachable,
+    }
+}
+
+fn unary(self: *Compiler, _: bool) CompileError!void {
+    const previous = self._previous_token.value;
+
+    try self.expression();
+    switch (previous) {
+        .BANG => try self._byte_code.op(.NOT),
+        .MINUS => try self._byte_code.op(.NEGATE),
+        else => unreachable,
+    }
+}
+
+fn number(self: *Compiler, _: bool) CompileError!void {
+    switch (self._previous_token.value) {
+        .INTEGER => |value| try self._byte_code.i64(value),
+        .FLOAT => |value| try self._byte_code.f64(value),
+        else => unreachable,
+    }
+}
+
+fn boolean(self: *Compiler, _: bool) CompileError!void {
+    return self._byte_code.bool(self._previous_token.value.BOOLEAN);
+}
+
+fn string(self: *Compiler, _: bool) CompileError!void {
+    return self._byte_code.string(self._previous_token.value.STRING);
+}
+
+fn @"null"(self: *Compiler, _: bool) CompileError!void {
+    return self._byte_code.null();
+}
+
+fn variable(self: *Compiler, can_assign: bool) CompileError!void {
+    const name = self._previous_token.value.IDENTIFIER;
+
+    const locals = self._locals;
+    var idx = self._local_count - 1;
+    while (idx >= 0) : (idx -= 1) {
+        if (std.mem.eql(u8, name, locals[idx].name)) {
+            break;
+        }
+    } else {
+        return setErrorFmt(error.UndefinedVariable, "Undefined variable: '{s}'", .{name}, .{});
     }
 
-    self._errors[len] = Error{
+    if (can_assign and try self.match(.EQUAL)) {
+        try self.expression();
+        try self._byte_code.setLocal(@intCast(idx));
+    } else {
+        try self._byte_code.getLocal(@intCast(idx));
+    }
+}
+
+pub fn setErrorFmt(self: *Compiler, err: CompileError, comptime fmt: []const u8, args: anytype, position: ?Position) CompileError!void {
+    const desc = try std.fmt.allocPrint(self._arena, fmt, args);
+    return self.setError(err, desc, position);
+}
+
+pub fn setError(self: *Compiler, err: CompileError, desc: []const u8, position: ?Position) CompileError!void {
+    self.err = .{
         .err = err,
         .desc = desc,
         .position = position orelse self._scanner.position(null),
     };
-
-    self._error_len = len + 1;
+    return err;
 }
 
 fn invalidToken(self: *Compiler, err: anyerror, comptime desc: []const u8, token: Token) !void {
-    return self.addErrorFmt(err, desc ++ ", got: '{s}'", .{self._scanner.srcAt(token.position)}, null);
+    return self.setErrorFmt(err, desc ++ ", got: '{s}'", .{self._scanner.srcAt(token.position)}, null);
 }
 
 const Precedence = enum {
@@ -235,46 +313,44 @@ inline fn getRule(token_type: Token.Type) *const ParseRule {
 }
 
 const ParseRule = struct {
-    infix: ?Fn,
-    prefix: ?Fn,
+    infix: ?*const fn (*Compiler) CompileError!void,
+    prefix: ?*const fn (*Compiler, bool) CompileError!void,
     precedence: i32,
-
-    const Fn = *const fn(*Compiler) anyerror!void;
 };
 
 const rules = buildParseRules(&.{
-    .{Token.Type.AND, null, null, Precedence.NONE},
-    .{Token.Type.BANG, null, Compiler.unary, Precedence.NONE},
-    .{Token.Type.BANG_EQUAL, Compiler.binary, null, Precedence.EQUALITY},
-    .{Token.Type.BOOLEAN, null, Compiler.boolean, Precedence.NONE},
-    .{Token.Type.COMMA, null, null, Precedence.NONE},
-    .{Token.Type.DOT, null, null, Precedence.NONE},
-    .{Token.Type.ELSE, null, null, Precedence.NONE},
-    .{Token.Type.EOF, null, null, Precedence.NONE},
-    .{Token.Type.EQUAL, null, null, Precedence.NONE},
-    .{Token.Type.EQUAL_EQUAL, Compiler.binary, null, Precedence.EQUALITY},
-    .{Token.Type.FLOAT, null, Compiler.number, Precedence.NONE},
-    .{Token.Type.GREATER, Compiler.binary, null, Precedence.COMPARISON},
-    .{Token.Type.GREATER_EQUAL, Compiler.binary, null, Precedence.COMPARISON},
-    .{Token.Type.IDENTIFIER, null, null, Precedence.NONE},
-    .{Token.Type.IF, null, null, Precedence.NONE},
-    .{Token.Type.INTEGER, null, Compiler.number, Precedence.NONE},
-    .{Token.Type.LEFT_BRACE, null, null, Precedence.NONE},
-    .{Token.Type.LEFT_PARENTHESIS, null, Compiler.grouping, Precedence.NONE},
-    .{Token.Type.LESSER, Compiler.binary, null, Precedence.COMPARISON},
-    .{Token.Type.LESSER_EQUAL, Compiler.binary, null, Precedence.COMPARISON},
-    .{Token.Type.MINUS, Compiler.binary, Compiler.unary, Precedence.TERM},
-    .{Token.Type.NULL, null, Compiler.@"null", Precedence.NONE},
-    .{Token.Type.OR, null, null, Precedence.NONE},
-    .{Token.Type.PLUS, Compiler.binary, null, Precedence.TERM},
-    .{Token.Type.RETURN, null, null, Precedence.NONE},
-    .{Token.Type.RIGHT_BRACE, null, null, Precedence.NONE},
-    .{Token.Type.RIGHT_PARENTHESIS, null, null, Precedence.NONE},
-    .{Token.Type.SEMICOLON, null, null, Precedence.NONE},
-    .{Token.Type.SLASH, Compiler.binary, null, Precedence.FACTOR},
-    .{Token.Type.STAR, Compiler.binary, null, Precedence.FACTOR},
-    .{Token.Type.STRING, null, Compiler.string, Precedence.NONE},
-    // .{Token.Type.VAR, null, null, Precedence.NONE},
+    .{ Token.Type.AND, null, null, Precedence.NONE },
+    .{ Token.Type.BANG, null, Compiler.unary, Precedence.NONE },
+    .{ Token.Type.BANG_EQUAL, Compiler.binary, null, Precedence.EQUALITY },
+    .{ Token.Type.BOOLEAN, null, Compiler.boolean, Precedence.NONE },
+    .{ Token.Type.COMMA, null, null, Precedence.NONE },
+    .{ Token.Type.DOT, null, null, Precedence.NONE },
+    .{ Token.Type.ELSE, null, null, Precedence.NONE },
+    .{ Token.Type.EOF, null, null, Precedence.NONE },
+    .{ Token.Type.EQUAL, null, null, Precedence.NONE },
+    .{ Token.Type.EQUAL_EQUAL, Compiler.binary, null, Precedence.EQUALITY },
+    .{ Token.Type.FLOAT, null, Compiler.number, Precedence.NONE },
+    .{ Token.Type.GREATER, Compiler.binary, null, Precedence.COMPARISON },
+    .{ Token.Type.GREATER_EQUAL, Compiler.binary, null, Precedence.COMPARISON },
+    .{ Token.Type.IDENTIFIER, null, Compiler.variable, Precedence.NONE },
+    .{ Token.Type.IF, null, null, Precedence.NONE },
+    .{ Token.Type.INTEGER, null, Compiler.number, Precedence.NONE },
+    .{ Token.Type.LEFT_BRACE, null, null, Precedence.NONE },
+    .{ Token.Type.LEFT_PARENTHESIS, null, Compiler.grouping, Precedence.NONE },
+    .{ Token.Type.LESSER, Compiler.binary, null, Precedence.COMPARISON },
+    .{ Token.Type.LESSER_EQUAL, Compiler.binary, null, Precedence.COMPARISON },
+    .{ Token.Type.MINUS, Compiler.binary, Compiler.unary, Precedence.TERM },
+    .{ Token.Type.NULL, null, Compiler.null, Precedence.NONE },
+    .{ Token.Type.OR, null, null, Precedence.NONE },
+    .{ Token.Type.PLUS, Compiler.binary, null, Precedence.TERM },
+    .{ Token.Type.RETURN, null, null, Precedence.NONE },
+    .{ Token.Type.RIGHT_BRACE, null, null, Precedence.NONE },
+    .{ Token.Type.RIGHT_PARENTHESIS, null, null, Precedence.NONE },
+    .{ Token.Type.SEMICOLON, null, null, Precedence.NONE },
+    .{ Token.Type.SLASH, Compiler.binary, null, Precedence.FACTOR },
+    .{ Token.Type.STAR, Compiler.binary, null, Precedence.FACTOR },
+    .{ Token.Type.STRING, null, Compiler.string, Precedence.NONE },
+    .{ Token.Type.VAR, null, Compiler.variable, Precedence.NONE },
     // .{Token.Type.WHILE, null, null, Precedence.NONE},
     // .{Token.Type.CLASS, null, null, Precedence.NONE},
     // .{Token.Type.ERROR, null, null, Precedence.NONE},
@@ -319,3 +395,17 @@ pub const Error = struct {
     position: Position,
 };
 
+const Local = struct {
+    name: []const u8,
+    depth: usize,
+};
+
+const CompileError = error{
+    ParseError,
+    OutOfMemory,
+    CompileError,
+    TooManyErrors, // TODO: remove
+    UnexpectedToken,
+    UnexpectedEOF,
+    ExpressionExpected,
+} || Scanner.ScanError;

@@ -12,8 +12,8 @@ allocator: Allocator,
 
 pub fn init(allocator: Allocator) !ByteCode {
     return .{
-        .code = .{.buf = try allocator.alloc(u8, 128)},
-        .data = .{.buf = try allocator.alloc(u8, 128)},
+        .code = .{ .buf = try allocator.alloc(u8, 128) },
+        .data = .{ .buf = try allocator.alloc(u8, 128) },
         .allocator = allocator,
     };
 }
@@ -24,40 +24,39 @@ pub fn deinit(self: *ByteCode) void {
     self.data.deinit(allocator);
 }
 
-pub fn addOp(self: *ByteCode, op: OpCode) !void {
-    return self.code.write(self.allocator, &.{@intFromEnum(op)});
+pub fn op(self: *ByteCode, op_code: OpCode) !void {
+    return self.code.write(self.allocator, &.{@intFromEnum(op_code)});
 }
 
-pub fn addOp2(self: *ByteCode, op1: OpCode, op2: OpCode) !void {
-    return self.code.write(self.allocator, &.{@intFromEnum(op1), @intFromEnum(op2)});
+pub fn op2(self: *ByteCode, op_code1: OpCode, op_code2: OpCode) !void {
+     return self.code.write(self.allocator, &.{@intFromEnum(op_code1), @intFromEnum(op_code2)});
 }
 
-pub fn addI64(self: *ByteCode, value: i64) !void {
+pub fn @"i64"(self: *ByteCode, value: i64) !void {
     var buf: [9]u8 = undefined;
     buf[0] = @intFromEnum(OpCode.CONSTANT_I64);
     @memcpy(buf[1..], std.mem.asBytes(&value));
     return self.code.write(self.allocator, &buf);
 }
 
-pub fn addF64(self: *ByteCode, value: f64) !void {
+pub fn @"f64"(self: *ByteCode, value: f64) !void {
     var buf: [9]u8 = undefined;
     buf[0] = @intFromEnum(OpCode.CONSTANT_F64);
     @memcpy(buf[1..], std.mem.asBytes(&value));
     return self.code.write(self.allocator, &buf);
 }
 
-pub fn addBool(self: *ByteCode, value: bool) !void {
+pub fn @"bool"(self: *ByteCode, value: bool) !void {
     var buf: [2]u8 = undefined;
     buf[0] = @intFromEnum(OpCode.CONSTANT_BOOL);
     buf[1] = if (value) 1 else 0;
     return self.code.write(self.allocator, &buf);
 }
 
-pub fn addString(self: *ByteCode, value: []const u8) !void {
+pub fn string(self: *ByteCode, value: []const u8) !void {
     var buf: [5]u8 = undefined;
     const header = buf[0..4];
     const data_start: u32 = @intCast(self.data.pos);
-
 
     // Storing the end, rather than the length, means once less addition we
     // need to make when running the bytecode
@@ -72,8 +71,38 @@ pub fn addString(self: *ByteCode, value: []const u8) !void {
     return self.code.write(self.allocator, &buf);
 }
 
-pub fn addNull(self: *ByteCode) !void {
-    return self.addOp(OpCode.CONSTANT_NULL);
+pub fn @"null"(self: *ByteCode) !void {
+    return self.op(OpCode.CONSTANT_NULL);
+}
+
+pub fn setLocal(self: *ByteCode, local_index: u8) !void {
+    var buf: [2]u8 = undefined;
+    buf[0] = @intFromEnum(OpCode.SET_LOCAL);
+    @memcpy(buf[1..], std.mem.asBytes(&local_index));
+    return self.code.write(self.allocator, &buf);
+}
+
+pub fn getLocal(self: *ByteCode, local_index: u8) !void {
+    var buf: [2]u8 = undefined;
+    buf[0] = @intFromEnum(OpCode.GET_LOCAL);
+    @memcpy(buf[1..], std.mem.asBytes(&local_index));
+    return self.code.write(self.allocator, &buf);
+}
+
+pub fn toBytes(self: *const ByteCode, allocator: Allocator) ![]const u8 {
+    const code = self.code;
+    const data = self.data;
+
+    const buf = try allocator.alloc(u8, 4 + code.pos + data.pos);
+
+    const data_start = 4 + code.pos;
+    const code_len: u32 = @intCast(code.pos);
+
+    @memcpy(buf[0..4], std.mem.asBytes(&code_len));
+    @memcpy(buf[4..data_start], code.buf[0..code.pos]);
+    @memcpy(buf[data_start..], data.buf[0..data.pos]);
+
+    return buf;
 }
 
 const Buffer = struct {
@@ -110,10 +139,16 @@ const Buffer = struct {
     }
 };
 
-pub fn dissassemble(code: []const u8, writer: anytype) !void {
+pub fn disassemble(byte_code: []const u8, writer: anytype) !void {
     var i: usize = 0;
+    const code_length = @as(u32, @bitCast(byte_code[0..4].*));
+    const code = byte_code[4 .. code_length + 4];
+
     while (i < code.len) {
-        const op_code: OpCode = @enumFromInt(code[i]);
+        const op_code = std.meta.intToEnum(OpCode, code[i]) catch {
+            try std.fmt.format(writer, "{x:0>4} ??? ({d})", .{ i, code[i] });
+            return;
+        };
         try std.fmt.format(writer, "{x:0>4} {s}", .{ i, @tagName(op_code) });
         i += 1;
         switch (op_code) {
@@ -157,13 +192,13 @@ test "bytecode: write + disassemble" {
     {
         var b = try ByteCode.init(t.allocator);
         defer b.deinit();
-        try b.addI64(-388491034);
-        try b.addF64(12.34567);
-        try b.addBool(true);
-        try b.addBool(false);
-        try b.addNull();
-        try b.addOp(OpCode.RETURN);
-        try expectDissasemble(b,
+        try b.i64(-388491034);
+        try b.f64(12.34567);
+        try b.bool(true);
+        try b.bool(false);
+        try b.null();
+        try b.op(OpCode.RETURN);
+        try expectDisassemble(b,
             \\0000 CONSTANT_I64 -388491034
             \\0009 CONSTANT_F64 12.34567
             \\0012 CONSTANT_BOOL 1
@@ -175,10 +210,13 @@ test "bytecode: write + disassemble" {
     }
 }
 
-fn expectDissasemble(b: ByteCode, expected: []const u8) !void {
+fn expectDisassemble(b: ByteCode, expected: []const u8) !void {
     var arr = std.ArrayList(u8).init(t.allocator);
     defer arr.deinit();
 
-    try dissassemble(b.code.buf[0..b.code.pos], arr.writer());
+    const byte_code = try b.toBytes(t.allocator);
+    defer t.allocator.free(byte_code);
+
+    try disassemble(byte_code, arr.writer());
     try t.expectString(expected, arr.items);
 }
