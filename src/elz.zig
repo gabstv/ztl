@@ -212,6 +212,14 @@ test "elz: variables" {
         \\    return name;
         \\ }
     ).string);
+
+    try t.expectEqual(4, testSimple(
+        \\ var count = 3;
+        \\ return count + 1;
+    ).i64);
+
+    try testError("Variable 'name' used before being initialized", "var name = name + 3;");
+    try testError("Variable 'unknown' is unknown", "return unknown;");
 }
 
 fn testSimple(src: []const u8) lib.Value {
@@ -247,4 +255,20 @@ fn testSimple(src: []const u8) lib.Value {
         .string => |str| .{.string = t.arena.allocator().dupe(u8, str) catch unreachable},
         else => value,
     };
+}
+
+fn testError(expected: []const u8, src: []const u8) !void {
+    var c = Compiler.init(t.allocator) catch unreachable;
+    defer c.deinit();
+
+    c.compile(src) catch {
+        const ce = c.err orelse unreachable;
+        if (std.mem.indexOf(u8, ce.desc, expected) == null) {
+            std.debug.print("Wrong error, expected: {s} but got:\n{}\n", .{expected, ce});
+            return error.WrongError;
+        }
+        return;
+    };
+
+    return error.NoError;
 }

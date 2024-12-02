@@ -102,14 +102,18 @@ fn declaration(self: *Compiler) CompileError!void {
             // backwards, until we find a conflict, or the scope chang
             const lc = self._local_count;
             self._locals[lc] = .{
+                .depth = null, // can't be used until after the expression
                 .name = variable_name,
-                .depth = self._scope_depth,
             };
             self._local_count = lc + 1;
 
             try self.consume(.EQUAL, "Expected assignment operator ('=')");
             try self.expression();
             try self.consume(.SEMICOLON, "Expected ';'");
+
+            // prevents things like: var count = count + 1;
+            self._locals[lc].depth = self._scope_depth;
+
         },
         else => return self.statement(),
     }
@@ -144,7 +148,7 @@ fn statement(self: *Compiler) CompileError!void {
             const locals = self._locals;
             var i = self._local_count - 1;
             while (i >= 0) : (i -= 1) {
-                if (locals[i].depth > scope) {
+                if (locals[i].depth.? > scope) {
                     try self._byte_code.op(.POP);
                 } else {
                     self._local_count = i + 1;
@@ -259,14 +263,25 @@ fn variable(self: *Compiler, can_assign: bool) CompileError!void {
     const name = self._previous_token.value.IDENTIFIER;
 
     const locals = self._locals;
-    var idx = self._local_count - 1;
-    while (idx >= 0) : (idx -= 1) {
-        if (std.mem.eql(u8, name, locals[idx].name)) {
-            break;
+
+    const idx = blk: {
+        const local_count = self._local_count;
+        if (local_count == 0) {
+            break :blk null;
         }
-    } else {
-        return setErrorFmt(error.UndefinedVariable, "Undefined variable: '{s}'", .{name}, .{});
-    }
+        var idx = local_count - 1;
+        while (idx >= 0) : (idx -= 1) {
+            const local = locals[idx];
+            if (std.mem.eql(u8, name, local.name)) {
+                if (local.depth == null) {
+                    return self.setErrorFmt(error.UninitializedVariable, "Variable '{s}' used before being initialized", .{name}, null);
+                }
+                break :blk idx;
+            }
+        }
+        break :blk null;
+    } orelse return self.setErrorFmt(error.UnknownVariable, "Variable '{s}' is unknown", .{name}, null);
+
 
     if (can_assign and try self.match(.EQUAL)) {
         try self.expression();
@@ -393,11 +408,15 @@ pub const Error = struct {
     err: anyerror,
     desc: []const u8,
     position: Position,
+
+    pub fn format(self: Error, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("{any}: {s}", .{self.err, self.desc});
+    }
 };
 
 const Local = struct {
     name: []const u8,
-    depth: usize,
+    depth: ?usize,
 };
 
 const CompileError = error{
@@ -408,4 +427,6 @@ const CompileError = error{
     UnexpectedToken,
     UnexpectedEOF,
     ExpressionExpected,
+    UnknownVariable,
+    UninitializedVariable,
 } || Scanner.ScanError;
