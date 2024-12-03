@@ -1,12 +1,47 @@
 const std = @import("std");
 
-const lib = @import("lib.zig");
+pub const VM = @import("vm.zig").VM;
+pub const Value = @import("value.zig").Value;
+pub const Config = @import("config.zig").Config;
+pub const Compiler = @import("compiler.zig").Compiler;
+pub const disassemble = @import("byte_code").disassemble;
 
-pub const VM = lib.VM;
-pub const Compiler = lib.Compiler;
-pub const disassemble = lib.ByteCode.disassemble;
+pub const Preset = struct {
+    pub const small = Config{
+        .max_locals = 256,
+        .initial_code_size = 256,
+        .initial_data_size = 256,
+    };
+};
 
 const t = @import("t.zig");
+
+test "elz: local limit" {
+    var c = Compiler(.{.max_locals = 3}).init(t.allocator) catch unreachable;
+    defer c.deinit();
+
+    blk: {
+        c.compile(
+            \\ var a = 1;
+            \\ var b = 1;
+            \\ var c = 1;
+            \\ var d = 1;
+        ) catch {
+            try t.expectString("maximum number of local variable (3) exceeded", c.err.?.desc);
+            break :blk;
+        };
+        return error.NoError;
+    }
+
+    {
+        c.reset(4096);
+        try c.compile(
+            \\ var a = 1;
+            \\ var b = 1;
+            \\ var c = 1;
+        );
+    }
+}
 
 test "elz: arithmetic" {
     try t.expectEqual(9, testSimple("return 1 + 8;").i64);
@@ -223,8 +258,8 @@ test "elz: variables" {
     try testError("Expected assignment operator ('='), got '`hello`' (STRING)", "var x `hello`");
 }
 
-fn testSimple(src: []const u8) lib.Value {
-    var c = Compiler.init(t.allocator) catch unreachable;
+fn testSimple(src: []const u8) Value {
+    var c = Compiler(Preset.small).init(t.allocator) catch unreachable;
     defer c.deinit();
 
     c.compile(src) catch {
@@ -256,7 +291,7 @@ fn testSimple(src: []const u8) lib.Value {
 }
 
 fn testError(expected: []const u8, src: []const u8) !void {
-    var c = Compiler.init(t.allocator) catch unreachable;
+    var c = Compiler(Preset.small).init(t.allocator) catch unreachable;
     defer c.deinit();
 
     c.compile(src) catch {

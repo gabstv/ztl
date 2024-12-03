@@ -1,317 +1,423 @@
 const std = @import("std");
-const lib = @import("lib.zig");
 
-const Token = lib.Token;
-const Scanner = lib.Scanner;
-const Position = lib.Position;
-const ByteCode = lib.ByteCode;
 const Allocator = std.mem.Allocator;
+const Token = @import("scanner.zig").Token;
+const Config = @import("config.zig").Config;
+const Scanner = @import("scanner.zig").Scanner;
+const Position = @import("scanner.zig").Position;
+const ByteCode = @import("byte_code.zig").ByteCode;
 
-const Compiler = @This();
+pub const CompileError = error{
+    ScanError,
+    OutOfMemory,
+    CompileError,
+};
 
-// the ByteCode that our compiler is generating
-_byte_code: ByteCode,
+pub fn Compiler(comptime config: Config) type {
+    return struct {
+        // the ByteCode that our compiler is generating
+        _byte_code: ByteCode(config),
 
-// Arena for memory that can be discarded after compilation. This arena, and
-// its allocator, are NOT used for anything to do with byte code generation.
-// Their main goal is for generating errors.
-_arena: Allocator,
+        // Arena for memory that can be discarded after compilation. This arena, and
+        // its allocator, are NOT used for anything to do with byte code generation.
+        // Their main goal is for generating errors.
+        _arena: Allocator,
 
-err: ?Error = null,
+        err: ?Error = null,
 
-// will be set when compile() is called
-_scanner: Scanner = undefined,
+        // will be set when compile() is called
+        _scanner: Scanner = undefined,
 
-// we just need to keep track of our current token and the
-// previous token to successfully parsed.
-_current_token: Token,
-_previous_token: Token,
+        // we just need to keep track of our current token and the
+        // previous token to successfully parsed.
+        _current_token: Token,
+        _previous_token: Token,
 
-// used to track local variables
-_locals: []Local,
-_scope_depth: usize = 0,
-_local_count: usize = 0,
+        // used to track local variables
+        _scope_depth: usize = 0,
+        _locals: std.ArrayListUnmanaged(Local),
 
-pub fn init(allocator: Allocator) !Compiler {
-    const arena = try allocator.create(std.heap.ArenaAllocator);
-    errdefer allocator.destroy(arena);
+        const Self = @This();
 
-    arena.* = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
+        pub fn init(allocator: Allocator) !Self {
+            const arena = try allocator.create(std.heap.ArenaAllocator);
+            errdefer allocator.destroy(arena);
 
-    const aa = arena.allocator();
+            arena.* = std.heap.ArenaAllocator.init(allocator);
+            errdefer arena.deinit();
 
-    return .{
-        ._arena = aa,
-        ._locals = try aa.alloc(Local, 10),
-        ._byte_code = try ByteCode.init(aa),
-        ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
-        ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
-    };
-}
+            const aa = arena.allocator();
 
-pub fn deinit(self: *const Compiler) void {
-    const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self._arena.ptr));
-    arena.deinit();
-    arena.child_allocator.destroy(arena);
-}
-
-pub fn byteCode(self: *const Compiler, allocator: Allocator) ![]const u8 {
-    return self._byte_code.toBytes(allocator);
-}
-
-pub fn compile(self: *Compiler, src: []const u8) CompileError!void {
-    self._scanner = Scanner.init(self, src);
-
-    try self.advance();
-
-    while (try self.match(.EOF) == false) {
-        try self.declaration();
-    }
-}
-
-fn advance(self: *Compiler) !void {
-    self._previous_token = self._current_token;
-    self._current_token = try self._scanner.next();
-}
-
-fn consume(self: *Compiler, expected: Token.Type, comptime message: []const u8) !void {
-    if (self._current_token.value != expected) {
-        return self.setExpectationError(message);
-    }
-    return self.advance();
-}
-fn consumeSemicolon(self: *Compiler) !void {
-    return self.consume(.SEMICOLON, "semicolon (',')");
-}
-
-fn match(self: *Compiler, expected: Token.Type) !bool {
-    if (self._current_token.value != expected) {
-        return false;
-    }
-    try self.advance();
-    return true;
-}
-
-fn declaration(self: *Compiler) CompileError!void {
-    switch (self._current_token.value) {
-        .VAR => {
-            try self.advance();
-            try self.consume(.IDENTIFIER, "variable name");
-
-            const variable_name = self._previous_token.value.IDENTIFIER;
-            // TODO: check self._locals for a variable with the same name
-            // in the same scope. Start at _locals[_local_count - 1] and work
-            // backwards, until we find a conflict, or the scope chang
-            const lc = self._local_count;
-            self._locals[lc] = .{
-                .depth = null, // can't be used until after the expression
-                .name = variable_name,
+            return .{
+                ._arena = aa,
+                ._locals = .{},
+                ._byte_code = try ByteCode(config).init(aa),
+                ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
+                ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
             };
-            self._local_count = lc + 1;
+        }
 
-            try self.consume(.EQUAL, "assignment operator ('=')");
-            try self.expression();
-            try self.consumeSemicolon();
+        pub fn deinit(self: *const Self) void {
+            const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self._arena.ptr));
+            arena.deinit();
+            arena.child_allocator.destroy(arena);
+        }
 
-            // prevents things like: var count = count + 1;
-            self._locals[lc].depth = self._scope_depth;
-        },
-        else => return self.statement(),
-    }
-}
+        pub fn reset(self: *Self, retain_limit: usize) void {
+            self._locals.capacity = 0;
+            self._locals.items.len = 0;
+            self._byte_code.reset();
+            const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self._arena.ptr));
+            _ = arena.reset(.{.retain_with_limit = retain_limit});
+        }
 
-fn statement(self: *Compiler) CompileError!void {
-    switch (self._current_token.value) {
-        .PRINT => {
+        pub fn byteCode(self: *const Self, allocator: Allocator) ![]const u8 {
+            return self._byte_code.toBytes(allocator);
+        }
+
+        pub fn compile(self: *Self, src: []const u8) CompileError!void {
+            self._scanner = Scanner.init(self._arena, src);
+
             try self.advance();
-            try self.expression();
-            try self.consumeSemicolon();
-            try self._byte_code.op(.PRINT);
-        },
-        .RETURN => {
-            try self.advance();
-            if (try self.match(.SEMICOLON)) {
-                try self._byte_code.op(.RETURN);
-            } else {
-                try self.expression();
-                try self.consumeSemicolon();
-                try self._byte_code.op(.RETURN);
+
+            while (try self.match(.EOF) == false) {
+                try self.declaration();
             }
-        },
-        .LEFT_BRACE => {
-            try self.advance();
-            const scope = self._scope_depth;
-            self._scope_depth = scope + 1;
-            try self.block();
-            self._scope_depth = scope;
+        }
 
-            // pop up any locals from this scope
-            const locals = self._locals;
-            var i = self._local_count - 1;
-            while (i >= 0) : (i -= 1) {
-                if (locals[i].depth.? > scope) {
+        fn advance(self: *Self) !void {
+            self._previous_token = self._current_token;
+            self._current_token = self._scanner.next() catch |err| {
+                if (self._scanner.err) |se| {
+                    self.setError(se, null);
+                    return error.ScanError;
+                }
+                return err;
+            };
+        }
+
+        fn consume(self: *Self, expected: Token.Type, comptime message: []const u8) !void {
+            if (self._current_token.value != expected) {
+                return self.setExpectationError(message);
+            }
+            return self.advance();
+        }
+        fn consumeSemicolon(self: *Self) !void {
+            return self.consume(.SEMICOLON, "semicolon (',')");
+        }
+
+        fn match(self: *Self, expected: Token.Type) !bool {
+            if (self._current_token.value != expected) {
+                return false;
+            }
+            try self.advance();
+            return true;
+        }
+
+        fn declaration(self: *Self) CompileError!void {
+            switch (self._current_token.value) {
+                .VAR => {
+                    try self.advance();
+                    try self.consume(.IDENTIFIER, "variable name");
+
+                    const variable_name = self._previous_token.value.IDENTIFIER;
+                    // TODO: check self._locals for a variable with the same name
+                    // in the same scope. Start at _locals[_local_count - 1] and work
+                    // backwards, until we find a conflict, or the scope chang
+                    var locals = &self._locals;
+                    if (locals.items.len == config.max_locals) {
+                        try self.setErrorFmt("maximum number of local variable ({d}) exceeded", .{config.max_locals}, null);
+                        return error.CompileError;
+                    }
+                    try locals.append(self._arena, .{
+                        .depth = null, // can't be used until after the expression
+                        .name = variable_name,
+                    });
+
+                    try self.consume(.EQUAL, "assignment operator ('=')");
+                    try self.expression();
+                    try self.consumeSemicolon();
+
+                    // prevents things like: var count = count + 1;
+                    locals.items[locals.items.len - 1].depth = self._scope_depth;
+                },
+                else => return self.statement(),
+            }
+        }
+
+        fn statement(self: *Self) CompileError!void {
+            switch (self._current_token.value) {
+                .PRINT => {
+                    try self.advance();
+                    try self.expression();
+                    try self.consumeSemicolon();
+                    try self._byte_code.op(.PRINT);
+                },
+                .RETURN => {
+                    try self.advance();
+                    if (try self.match(.SEMICOLON)) {
+                        try self._byte_code.op(.RETURN);
+                    } else {
+                        try self.expression();
+                        try self.consumeSemicolon();
+                        try self._byte_code.op(.RETURN);
+                    }
+                },
+                .LEFT_BRACE => {
+                    try self.advance();
+                    const scope = self._scope_depth;
+                    self._scope_depth = scope + 1;
+                    try self.block();
+                    self._scope_depth = scope;
+
+                    // pop off any locals from this scope
+                    const locals = &self._locals;
+                    var i = locals.items.len - 1;
+                    while (i >= 0) : (i -= 1) {
+                        if (locals.items[i].depth.? > scope) {
+                            try self._byte_code.op(.POP);
+                        } else {
+                            locals.items.len = i + 1;
+                            break;
+                        }
+                    } else {
+                        locals.clearRetainingCapacity();
+                    }
+                },
+                else => {
+                    try self.expression();
+                    try self.consumeSemicolon();
                     try self._byte_code.op(.POP);
+                },
+            }
+        }
+
+        fn block(self: *Self) CompileError!void {
+            while (true) {
+                switch (self._current_token.value) {
+                    .RIGHT_BRACE => return self.advance(),
+                    .EOF => return self.setExpectationError("closing block ('}}')"),
+                    else => try self.declaration(),
+                }
+            }
+        }
+
+        fn expression(self: *Self) CompileError!void {
+            return self.parsePrecedence(.ASSIGNMENT);
+        }
+
+        fn parsePrecedence(self: *Self, precedence: Precedence) CompileError!void {
+            try self.advance();
+            {
+                const rule = ParseRule(Self).get(self._previous_token.value);
+                if (rule.prefix) |prefix| {
+                    const can_assign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
+                    try prefix(self, can_assign);
                 } else {
-                    self._local_count = i + 1;
+                    return self.setExpectationError("an expression");
+                }
+            }
+
+            const nprec = @intFromEnum(precedence);
+            while (true) {
+                const rule = ParseRule(Self).get(self._current_token.value);
+                if (nprec > rule.precedence) {
                     break;
                 }
-            } else {
-                self._local_count = 0;
+                try self.advance();
+                try rule.infix.?(self);
             }
-        },
-        else => {
+        }
+
+        fn grouping(self: *Self, _: bool) CompileError!void {
             try self.expression();
-            try self.consumeSemicolon();
-            try self._byte_code.op(.POP);
-        },
-    }
-}
-
-fn block(self: *Compiler) CompileError!void {
-    while (true) {
-        switch (self._current_token.value) {
-            .RIGHT_BRACE => return self.advance(),
-            .EOF => return self.setExpectationError("closing block ('}}')"),
-            else => try self.declaration(),
+            return self.consume(.RIGHT_PARENTHESIS, "Expected closing parathesis ')'");
         }
-    }
-}
 
-fn expression(self: *Compiler) CompileError!void {
-    return self.parsePrecedence(.ASSIGNMENT);
-}
+        fn binary(self: *Self) CompileError!void {
+            const previous = self._previous_token.value;
+            const rule = ParseRule(Self).get(previous);
+            try self.parsePrecedence(@enumFromInt(rule.precedence + 1));
 
-fn parsePrecedence(self: *Compiler, precedence: Precedence) CompileError!void {
-    try self.advance();
-    {
-        const rule = getRule(self._previous_token.value);
-        if (rule.prefix) |prefix| {
-            const can_assign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
-            try prefix(self, can_assign);
-        } else {
-            return self.setExpectationError("an expression");
-        }
-    }
-
-    const nprec = @intFromEnum(precedence);
-    while (true) {
-        const rule = getRule(self._current_token.value);
-        if (nprec > rule.precedence) {
-            break;
-        }
-        try self.advance();
-        try rule.infix.?(self);
-    }
-}
-
-fn grouping(self: *Compiler, _: bool) CompileError!void {
-    try self.expression();
-    return self.consume(.RIGHT_PARENTHESIS, "Expected closing parathesis ')'");
-}
-
-fn binary(self: *Compiler) CompileError!void {
-    const previous = self._previous_token.value;
-    const rule = getRule(previous);
-    try self.parsePrecedence(@enumFromInt(rule.precedence + 1));
-
-    switch (previous) {
-        .PLUS => try self._byte_code.op(.ADD),
-        .MINUS => try self._byte_code.op(.SUBTRACT),
-        .STAR => try self._byte_code.op(.MULTIPLY),
-        .SLASH => try self._byte_code.op(.DIVIDE),
-        .EQUAL_EQUAL => try self._byte_code.op(.EQUAL),
-        .BANG_EQUAL => try self._byte_code.op2(.EQUAL, .NOT),
-        .GREATER => try self._byte_code.op(.GREATER),
-        .GREATER_EQUAL => try self._byte_code.op2(.LESSER, .NOT),
-        .LESSER => try self._byte_code.op(.LESSER),
-        .LESSER_EQUAL => try self._byte_code.op2(.GREATER, .NOT),
-        else => unreachable,
-    }
-}
-
-fn unary(self: *Compiler, _: bool) CompileError!void {
-    const previous = self._previous_token.value;
-
-    try self.expression();
-    switch (previous) {
-        .BANG => try self._byte_code.op(.NOT),
-        .MINUS => try self._byte_code.op(.NEGATE),
-        else => unreachable,
-    }
-}
-
-fn number(self: *Compiler, _: bool) CompileError!void {
-    switch (self._previous_token.value) {
-        .INTEGER => |value| try self._byte_code.i64(value),
-        .FLOAT => |value| try self._byte_code.f64(value),
-        else => unreachable,
-    }
-}
-
-fn boolean(self: *Compiler, _: bool) CompileError!void {
-    return self._byte_code.bool(self._previous_token.value.BOOLEAN);
-}
-
-fn string(self: *Compiler, _: bool) CompileError!void {
-    return self._byte_code.string(self._previous_token.value.STRING);
-}
-
-fn @"null"(self: *Compiler, _: bool) CompileError!void {
-    return self._byte_code.null();
-}
-
-fn variable(self: *Compiler, can_assign: bool) CompileError!void {
-    const name = self._previous_token.value.IDENTIFIER;
-
-    const locals = self._locals;
-
-    const idx = blk: {
-        const local_count = self._local_count;
-        if (local_count == 0) {
-            break :blk null;
-        }
-        var idx = local_count - 1;
-        while (idx >= 0) : (idx -= 1) {
-            const local = locals[idx];
-            if (std.mem.eql(u8, name, local.name)) {
-                if (local.depth == null) {
-                    return self.setErrorFmt("Variable '{s}' used before being initialized", .{name}, null);
-                }
-                break :blk idx;
+            switch (previous) {
+                .PLUS => try self._byte_code.op(.ADD),
+                .MINUS => try self._byte_code.op(.SUBTRACT),
+                .STAR => try self._byte_code.op(.MULTIPLY),
+                .SLASH => try self._byte_code.op(.DIVIDE),
+                .EQUAL_EQUAL => try self._byte_code.op(.EQUAL),
+                .BANG_EQUAL => try self._byte_code.op2(.EQUAL, .NOT),
+                .GREATER => try self._byte_code.op(.GREATER),
+                .GREATER_EQUAL => try self._byte_code.op2(.LESSER, .NOT),
+                .LESSER => try self._byte_code.op(.LESSER),
+                .LESSER_EQUAL => try self._byte_code.op2(.GREATER, .NOT),
+                else => unreachable,
             }
         }
-        break :blk null;
-    } orelse return self.setErrorFmt("Variable '{s}' is unknown", .{name}, null);
 
-    if (can_assign and try self.match(.EQUAL)) {
-        try self.expression();
-        try self._byte_code.setLocal(@intCast(idx));
-    } else {
-        try self._byte_code.getLocal(@intCast(idx));
-    }
-}
+        fn unary(self: *Self, _: bool) CompileError!void {
+            const previous = self._previous_token.value;
 
-pub fn setExpectationError(self: *Compiler, comptime message: []const u8) CompileError!void {
-    const current_token = self._current_token;
-    return self.setErrorFmt("Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) }, null);
-}
+            try self.expression();
+            switch (previous) {
+                .BANG => try self._byte_code.op(.NOT),
+                .MINUS => try self._byte_code.op(.NEGATE),
+                else => unreachable,
+            }
+        }
 
-pub fn setErrorFmt(self: *Compiler, comptime fmt: []const u8, args: anytype, position: ?Position) CompileError!void {
-    const desc = try std.fmt.allocPrint(self._arena, fmt, args);
-    return self.setError(desc, position);
-}
+        fn number(self: *Self, _: bool) CompileError!void {
+            switch (self._previous_token.value) {
+                .INTEGER => |value| try self._byte_code.i64(value),
+                .FLOAT => |value| try self._byte_code.f64(value),
+                else => unreachable,
+            }
+        }
 
-pub fn setError(self: *Compiler, desc: []const u8, position: ?Position) CompileError!void {
-    self.err = .{
-        .desc = desc,
-        .position = position orelse self._scanner.position(null),
+        fn boolean(self: *Self, _: bool) CompileError!void {
+            return self._byte_code.bool(self._previous_token.value.BOOLEAN);
+        }
+
+        fn string(self: *Self, _: bool) CompileError!void {
+            return self._byte_code.string(self._previous_token.value.STRING);
+        }
+
+        fn @"null"(self: *Self, _: bool) CompileError!void {
+            return self._byte_code.null();
+        }
+
+        fn variable(self: *Self, can_assign: bool) CompileError!void {
+            const name = self._previous_token.value.IDENTIFIER;
+
+            const idx = blk: {
+                const locals = self._locals.items;
+                if (locals.len == 0) {
+                    break :blk null;
+                }
+                var idx = locals.len - 1;
+                while (idx >= 0) : (idx -= 1) {
+                    const local = locals[idx];
+                    if (std.mem.eql(u8, name, local.name)) {
+                        if (local.depth == null) {
+                            try self.setErrorFmt("Variable '{s}' used before being initialized", .{name}, null);
+                            return error.CompileError;
+                        }
+                        break :blk idx;
+                    }
+                }
+                break :blk null;
+            } orelse {
+                try self.setErrorFmt("Variable '{s}' is unknown", .{name}, null);
+                return error.CompileError;
+            };
+
+            if (can_assign and try self.match(.EQUAL)) {
+                try self.expression();
+                try self._byte_code.setLocal(@intCast(idx));
+            } else {
+                try self._byte_code.getLocal(@intCast(idx));
+            }
+        }
+
+        pub fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {
+            const current_token = self._current_token;
+            try self.setErrorFmt("Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) }, null);
+            return error.CompileError;
+        }
+
+        pub fn setErrorFmt(self: *Self, comptime fmt: []const u8, args: anytype, position: ?Position) !void {
+            const desc = try std.fmt.allocPrint(self._arena, fmt, args);
+            return self.setError(desc, position);
+        }
+
+        pub fn setError(self: *Self, desc: []const u8, position: ?Position) void {
+            self.err = .{
+                .desc = desc,
+                .position = position orelse self._scanner.position(null),
+            };
+        }
+
+        fn invalidToken(self: *Self, err: anyerror, comptime desc: []const u8, token: Token) !void {
+            try self.setErrorFmt(err, desc ++ ", got: '{s}'", .{self._scanner.srcAt(token.position)}, null);
+            return error.CompileError;
+        }
     };
-    return error.CompileError;
 }
 
-fn invalidToken(self: *Compiler, err: anyerror, comptime desc: []const u8, token: Token) !void {
-    return self.setErrorFmt(err, desc ++ ", got: '{s}'", .{self._scanner.srcAt(token.position)}, null);
+fn ParseRule(comptime C: type) type {
+    return struct {
+        infix: ?*const fn (*C) CompileError!void,
+        prefix: ?*const fn (*C, bool) CompileError!void,
+        precedence: i32,
+
+        const Self = @This();
+
+        inline fn get(token_type: Token.Type) *const Self {
+            return &rules[@intFromEnum(token_type)];
+        }
+
+        const rules = buildParseRules(&.{
+            .{ Token.Type.AND, null, null, Precedence.NONE },
+            .{ Token.Type.BANG, null, C.unary, Precedence.NONE },
+            .{ Token.Type.BANG_EQUAL, C.binary, null, Precedence.EQUALITY },
+            .{ Token.Type.BOOLEAN, null, C.boolean, Precedence.NONE },
+            .{ Token.Type.COMMA, null, null, Precedence.NONE },
+            .{ Token.Type.DOT, null, null, Precedence.NONE },
+            .{ Token.Type.ELSE, null, null, Precedence.NONE },
+            .{ Token.Type.EOF, null, null, Precedence.NONE },
+            .{ Token.Type.EQUAL, null, null, Precedence.NONE },
+            .{ Token.Type.EQUAL_EQUAL, C.binary, null, Precedence.EQUALITY },
+            .{ Token.Type.FLOAT, null, C.number, Precedence.NONE },
+            .{ Token.Type.GREATER, C.binary, null, Precedence.COMPARISON },
+            .{ Token.Type.GREATER_EQUAL, C.binary, null, Precedence.COMPARISON },
+            .{ Token.Type.IDENTIFIER, null, C.variable, Precedence.NONE },
+            .{ Token.Type.IF, null, null, Precedence.NONE },
+            .{ Token.Type.INTEGER, null, C.number, Precedence.NONE },
+            .{ Token.Type.LEFT_BRACE, null, null, Precedence.NONE },
+            .{ Token.Type.LEFT_PARENTHESIS, null, C.grouping, Precedence.NONE },
+            .{ Token.Type.LESSER, C.binary, null, Precedence.COMPARISON },
+            .{ Token.Type.LESSER_EQUAL, C.binary, null, Precedence.COMPARISON },
+            .{ Token.Type.MINUS, C.binary, C.unary, Precedence.TERM },
+            .{ Token.Type.NULL, null, C.null, Precedence.NONE },
+            .{ Token.Type.OR, null, null, Precedence.NONE },
+            .{ Token.Type.PLUS, C.binary, null, Precedence.TERM },
+            .{ Token.Type.RETURN, null, null, Precedence.NONE },
+            .{ Token.Type.RIGHT_BRACE, null, null, Precedence.NONE },
+            .{ Token.Type.RIGHT_PARENTHESIS, null, null, Precedence.NONE },
+            .{ Token.Type.SEMICOLON, null, null, Precedence.NONE },
+            .{ Token.Type.SLASH, C.binary, null, Precedence.FACTOR },
+            .{ Token.Type.STAR, C.binary, null, Precedence.FACTOR },
+            .{ Token.Type.STRING, null, C.string, Precedence.NONE },
+            .{ Token.Type.VAR, null, C.variable, Precedence.NONE },
+            // .{Token.Type.WHILE, null, null, Precedence.NONE},
+            // .{Token.Type.CLASS, null, null, Precedence.NONE},
+            // .{Token.Type.ERROR, null, null, Precedence.NONE},
+            // .{Token.Type.FOR, null, null, Precedence.NONE},
+            // .{Token.Type.FUN, null, null, Precedence.NONE},
+            // .{Token.Type.PRINT, null, null, Precedence.NONE},
+            // .{Token.Type.SUPER, null, null, Precedence.NONE},
+            // .{Token.Type.THIS, null, null, Precedence.NONE},
+        });
+
+        fn buildParseRules(definitions: anytype) [maxRuleIndex(Token.Type)]Self {
+            var _rules: [maxRuleIndex(Token.Type)]Self = undefined;
+            for (&_rules) |*r| {
+                r.* = .{
+                    .infix = null,
+                    .prefix = null,
+                    .precedence = 0,
+                };
+            }
+            for (definitions) |definition| {
+                const index = @intFromEnum(definition.@"0");
+                _rules[index] = .{
+                    .infix = definition.@"1",
+                    .prefix = definition.@"2",
+                    .precedence = @intFromEnum(definition.@"3"),
+                };
+            }
+            return _rules;
+        }
+    };
 }
 
 const Precedence = enum {
@@ -327,79 +433,6 @@ const Precedence = enum {
     CALL, // . ()
     PRIMARY,
 };
-
-inline fn getRule(token_type: Token.Type) *const ParseRule {
-    return &rules[@intFromEnum(token_type)];
-}
-
-const ParseRule = struct {
-    infix: ?*const fn (*Compiler) CompileError!void,
-    prefix: ?*const fn (*Compiler, bool) CompileError!void,
-    precedence: i32,
-};
-
-const rules = buildParseRules(&.{
-    .{ Token.Type.AND, null, null, Precedence.NONE },
-    .{ Token.Type.BANG, null, Compiler.unary, Precedence.NONE },
-    .{ Token.Type.BANG_EQUAL, Compiler.binary, null, Precedence.EQUALITY },
-    .{ Token.Type.BOOLEAN, null, Compiler.boolean, Precedence.NONE },
-    .{ Token.Type.COMMA, null, null, Precedence.NONE },
-    .{ Token.Type.DOT, null, null, Precedence.NONE },
-    .{ Token.Type.ELSE, null, null, Precedence.NONE },
-    .{ Token.Type.EOF, null, null, Precedence.NONE },
-    .{ Token.Type.EQUAL, null, null, Precedence.NONE },
-    .{ Token.Type.EQUAL_EQUAL, Compiler.binary, null, Precedence.EQUALITY },
-    .{ Token.Type.FLOAT, null, Compiler.number, Precedence.NONE },
-    .{ Token.Type.GREATER, Compiler.binary, null, Precedence.COMPARISON },
-    .{ Token.Type.GREATER_EQUAL, Compiler.binary, null, Precedence.COMPARISON },
-    .{ Token.Type.IDENTIFIER, null, Compiler.variable, Precedence.NONE },
-    .{ Token.Type.IF, null, null, Precedence.NONE },
-    .{ Token.Type.INTEGER, null, Compiler.number, Precedence.NONE },
-    .{ Token.Type.LEFT_BRACE, null, null, Precedence.NONE },
-    .{ Token.Type.LEFT_PARENTHESIS, null, Compiler.grouping, Precedence.NONE },
-    .{ Token.Type.LESSER, Compiler.binary, null, Precedence.COMPARISON },
-    .{ Token.Type.LESSER_EQUAL, Compiler.binary, null, Precedence.COMPARISON },
-    .{ Token.Type.MINUS, Compiler.binary, Compiler.unary, Precedence.TERM },
-    .{ Token.Type.NULL, null, Compiler.null, Precedence.NONE },
-    .{ Token.Type.OR, null, null, Precedence.NONE },
-    .{ Token.Type.PLUS, Compiler.binary, null, Precedence.TERM },
-    .{ Token.Type.RETURN, null, null, Precedence.NONE },
-    .{ Token.Type.RIGHT_BRACE, null, null, Precedence.NONE },
-    .{ Token.Type.RIGHT_PARENTHESIS, null, null, Precedence.NONE },
-    .{ Token.Type.SEMICOLON, null, null, Precedence.NONE },
-    .{ Token.Type.SLASH, Compiler.binary, null, Precedence.FACTOR },
-    .{ Token.Type.STAR, Compiler.binary, null, Precedence.FACTOR },
-    .{ Token.Type.STRING, null, Compiler.string, Precedence.NONE },
-    .{ Token.Type.VAR, null, Compiler.variable, Precedence.NONE },
-    // .{Token.Type.WHILE, null, null, Precedence.NONE},
-    // .{Token.Type.CLASS, null, null, Precedence.NONE},
-    // .{Token.Type.ERROR, null, null, Precedence.NONE},
-    // .{Token.Type.FOR, null, null, Precedence.NONE},
-    // .{Token.Type.FUN, null, null, Precedence.NONE},
-    // .{Token.Type.PRINT, null, null, Precedence.NONE},
-    // .{Token.Type.SUPER, null, null, Precedence.NONE},
-    // .{Token.Type.THIS, null, null, Precedence.NONE},
-});
-
-fn buildParseRules(definitions: anytype) [maxRuleIndex(Token.Type)]ParseRule {
-    var _rules: [maxRuleIndex(Token.Type)]ParseRule = undefined;
-    for (&_rules) |*r| {
-        r.* = .{
-            .infix = null,
-            .prefix = null,
-            .precedence = 0,
-        };
-    }
-    for (definitions) |definition| {
-        const index = @intFromEnum(definition.@"0");
-        _rules[index] = .{
-            .infix = definition.@"1",
-            .prefix = definition.@"2",
-            .precedence = @intFromEnum(definition.@"3"),
-        };
-    }
-    return _rules;
-}
 
 fn maxRuleIndex(comptime E: type) usize {
     var max: usize = 0;
@@ -422,5 +455,3 @@ const Local = struct {
     name: []const u8,
     depth: ?usize,
 };
-
-pub const CompileError = error{ CompileError, OutOfMemory };
