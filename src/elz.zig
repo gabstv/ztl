@@ -258,6 +258,84 @@ test "elz: variables" {
     try testError("Expected assignment operator ('='), got '`hello`' (STRING)", "var x `hello`");
 }
 
+test "elz: if" {
+    defer t.reset();
+
+    try t.expectEqual(1234, testSimple(
+        \\ if (true) {
+        \\   return 1234;
+        \\ }
+        \\ return 4321;
+    ).i64);
+
+    try t.expectEqual(4321, testSimple(
+        \\ if (false) {
+        \\   return 1234;
+        \\ }
+        \\ return 4321;
+    ).i64);
+
+    try t.expectEqual(9, testSimple(
+        \\ if (1 == 1) {
+        \\   return 9;
+        \\ } else {
+        \\   return 10;
+        \\ }
+    ).i64);
+
+    try t.expectEqual(10, testSimple(
+        \\ if (1 != 1) {
+        \\   return 9;
+        \\ } else {
+        \\   return 10;
+        \\ }
+    ).i64);
+
+    try t.expectEqual(8, testSimple(
+        \\ if (1 == 1) {
+        \\   return 8;
+        \\ } else if (2 == 2) {
+        \\   return 9;
+        \\ } else {
+        \\   return 10;
+        \\ }
+    ).i64);
+
+    try t.expectEqual(9, testSimple(
+        \\ if (1 != 1) {
+        \\   return 8;
+        \\ } else if (2 == 2) {
+        \\   return 9;
+        \\ } else {
+        \\   return 10;
+        \\ }
+    ).i64);
+
+    try t.expectEqual(10, testSimple(
+        \\ if (1 != 1) {
+        \\   return 8;
+        \\ } else if (2 != 2) {
+        \\   return 9;
+        \\ } else {
+        \\   return 10;
+        \\ }
+    ).i64);
+}
+
+test "elz: logical operators" {
+    try t.expectEqual(false, testSimple("return 1 == 1 and 3 == 2;").bool);
+    try t.expectEqual(false, testSimple("return 0 == 1 and 3 == 2;").bool);
+    try t.expectEqual(false, testSimple("return 1 == 3 or 3 == 4;").bool);
+    try t.expectEqual(true, testSimple("return 1 == 1 and 2 == 2;").bool);
+    try t.expectEqual(true, testSimple("return 1 == 1 or 3 == 2;").bool);
+    try t.expectEqual(true, testSimple("return 1 == 3 or 3 == 3;").bool);
+    try t.expectEqual(false, testSimple("return 1 == 3 and (3 == 4 or 4 == 4);").bool);
+}
+
+test "elz: empty scope"  {
+    _ = testSimple("{}"); // doesn't crash, yay!
+}
+
 fn testSimple(src: []const u8) Value {
     var c = Compiler(Preset.small).init(t.allocator) catch unreachable;
     defer c.deinit();

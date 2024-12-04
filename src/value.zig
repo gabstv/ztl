@@ -20,4 +20,8 @@ pub const Value = union(enum) {
             .null => return writer.writeAll("null"),
         }
     }
+
+    pub fn isTrue(self: Value) bool {
+        return self == .bool and self.bool;
+    }
 };

@@ -36,6 +36,10 @@ pub const VM = struct {
         const code_length = @as(u32, @bitCast(ip[0..4].*));
         ip += 4;
 
+        if (code_length == 0) {
+            return .{.null = {}};
+        }
+
         const data = ip[code_length..];
 
         while (true) {
@@ -73,7 +77,7 @@ pub const VM = struct {
                 .SET_LOCAL => {
                     const idx = ip[0];
                     ip += 1;
-                    self._stack[idx] = (self._stack_pointer - 1)[0];
+                    self._stack[idx] = self.peek();
                 },
                 .ADD => try self.arithmetic(&add),
                 .SUBTRACT => try self.arithmetic(&subtract),
@@ -97,6 +101,16 @@ pub const VM = struct {
                 .EQUAL => try self.comparison(&equal),
                 .GREATER => try self.comparison(&greater),
                 .LESSER => try self.comparison(&lesser),
+                .JUMP => ip += 2 + @as(u16, @bitCast(ip[0..2].*)),
+                .JUMP_IF_FALSE => {
+                    if (self.peek().isTrue()) {
+                        // just skip the jump address
+                        ip += 2;
+                    } else {
+                        // skip the jump address + the nested code
+                        ip += 2 + @as(u16, @bitCast(ip[0..2].*));
+                    }
+                },
                 .PRINT => std.debug.print("{}\n", .{self.pop()}),
                 .POP => _ = self.pop(),
                 .RETURN => return self.pop(),
@@ -112,6 +126,10 @@ pub const VM = struct {
     fn pop(self: *VM) Value {
         self._stack_pointer -= 1;
         return self._stack_pointer[0];
+    }
+
+    fn peek(self: *VM) Value {
+        return (self._stack_pointer - 1)[0];
     }
 
     fn arithmetic(self: *VM, operation: *const fn (self: *VM, left: Value, right: Value) anyerror!Value) !void {

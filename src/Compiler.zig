@@ -146,21 +146,32 @@ pub fn Compiler(comptime config: Config) type {
         }
 
         fn statement(self: *Self) CompileError!void {
+            var bc = &self._byte_code;
             switch (self._current_token.value) {
-                .PRINT => {
+                .IF => {
                     try self.advance();
+                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
                     try self.expression();
-                    try self.consumeSemicolon();
-                    try self._byte_code.op(.PRINT);
-                },
-                .RETURN => {
-                    try self.advance();
-                    if (try self.match(.SEMICOLON)) {
-                        try self._byte_code.op(.RETURN);
+                    try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
+
+                    const if_jump = try bc.opJump(.JUMP_IF_FALSE);
+                    try bc.op(.POP); // pop the if condition (inside the if block)
+
+                    try self.statement();
+
+                    // while (try self.match(.ELSE_IF)) {
+
+                    // }
+
+                    if (try self.match(.ELSE)) {
+                        const else_jump = try bc.opJump(.JUMP);
+                        try bc.op(.POP); // pop the if condition (inside the else block)
+                        try self.finalizeJump(if_jump);
+                        try self.statement();
+                        try self.finalizeJump(else_jump);
                     } else {
-                        try self.expression();
-                        try self.consumeSemicolon();
-                        try self._byte_code.op(.RETURN);
+                        try bc.op(.POP); // pop the if condition (when false with no else
+                        try self.finalizeJump(if_jump);
                     }
                 },
                 .LEFT_BRACE => {
@@ -172,24 +183,50 @@ pub fn Compiler(comptime config: Config) type {
 
                     // pop off any locals from this scope
                     const locals = &self._locals;
-                    var i = locals.items.len - 1;
-                    while (i >= 0) : (i -= 1) {
-                        if (locals.items[i].depth.? > scope) {
-                            try self._byte_code.op(.POP);
+                    const count = locals.items.len;
+                    if (count > 0) {
+                        var i = count - 1;
+                        while (i >= 0) : (i -= 1) {
+                            if (locals.items[i].depth.? > scope) {
+                                try bc.op(.POP);
+                            } else {
+                                locals.items.len = i + 1;
+                                break;
+                            }
                         } else {
-                            locals.items.len = i + 1;
-                            break;
+                            locals.clearRetainingCapacity();
                         }
+                    }
+                },
+                .PRINT => {
+                    try self.advance();
+                    try self.expression();
+                    try self.consumeSemicolon();
+                    try bc.op(.PRINT);
+                },
+                .RETURN => {
+                    try self.advance();
+                    if (try self.match(.SEMICOLON)) {
+                        try bc.op(.RETURN);
                     } else {
-                        locals.clearRetainingCapacity();
+                        try self.expression();
+                        try self.consumeSemicolon();
+                        try bc.op(.RETURN);
                     }
                 },
                 else => {
                     try self.expression();
                     try self.consumeSemicolon();
-                    try self._byte_code.op(.POP);
+                    try bc.op(.POP);
                 },
             }
+        }
+
+        fn finalizeJump(self: *Self, jump_pos: usize) !void  {
+            self._byte_code.opJumpTo(jump_pos) catch {
+                self.setError("Jump size exceeded maximum allowed value", null);
+                return error.CompileError;
+            };
         }
 
         fn block(self: *Self) CompileError!void {
@@ -231,7 +268,7 @@ pub fn Compiler(comptime config: Config) type {
 
         fn grouping(self: *Self, _: bool) CompileError!void {
             try self.expression();
-            return self.consume(.RIGHT_PARENTHESIS, "Expected closing parathesis ')'");
+            return self.consume(.RIGHT_PARENTHESIS, "Expected closing parentheses ')'");
         }
 
         fn binary(self: *Self) CompileError!void {
@@ -318,6 +355,34 @@ pub fn Compiler(comptime config: Config) type {
             }
         }
 
+        fn @"and"(self: *Self) CompileError!void {
+            const bc = &self._byte_code;
+
+            // shortcircuit, the left side is already executed, if it's false, we
+            // can skip the rest.
+            const end_pos = try bc.opJump(.JUMP_IF_FALSE);
+            try bc.op(.POP);
+            try self.parsePrecedence(.AND);
+            try self.finalizeJump(end_pos);
+        }
+
+        fn @"or"(self: *Self) CompileError!void {
+            const bc = &self._byte_code;
+
+            // Rather than add a new op (JUMP_IF_TRUE), we can simulate this by
+            // combining JUMP_IF_FALSE to jump over a JUMP. IF the left side (
+            // which we've already executed) is true, the JUMP_IF_FALSE will
+            // be skipped, and we'll execute the JUMP, which will skip the
+            // right of the conditions. In other words, the JUMP_IS_FALSE only
+            // exists to jump over the JUMP, which exists to shortcircuit on true.
+            const else_pos = try bc.opJump(.JUMP_IF_FALSE);
+            const end_pos = try bc.opJump(.JUMP);
+            try self.finalizeJump(else_pos);
+            try bc.op(.POP);
+            try self.parsePrecedence(.OR);
+            try self.finalizeJump(end_pos);
+        }
+
         pub fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {
             const current_token = self._current_token;
             try self.setErrorFmt("Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) }, null);
@@ -356,7 +421,7 @@ fn ParseRule(comptime C: type) type {
         }
 
         const rules = buildParseRules(&.{
-            .{ Token.Type.AND, null, null, Precedence.NONE },
+            .{ Token.Type.AND, C.@"and", null, Precedence.AND },
             .{ Token.Type.BANG, null, C.unary, Precedence.NONE },
             .{ Token.Type.BANG_EQUAL, C.binary, null, Precedence.EQUALITY },
             .{ Token.Type.BOOLEAN, null, C.boolean, Precedence.NONE },
@@ -378,7 +443,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.LESSER_EQUAL, C.binary, null, Precedence.COMPARISON },
             .{ Token.Type.MINUS, C.binary, C.unary, Precedence.TERM },
             .{ Token.Type.NULL, null, C.null, Precedence.NONE },
-            .{ Token.Type.OR, null, null, Precedence.NONE },
+            .{ Token.Type.OR, C.@"or", null, Precedence.OR },
             .{ Token.Type.PLUS, C.binary, null, Precedence.TERM },
             .{ Token.Type.RETURN, null, null, Precedence.NONE },
             .{ Token.Type.RIGHT_BRACE, null, null, Precedence.NONE },

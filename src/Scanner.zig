@@ -303,43 +303,33 @@ pub const Scanner = struct {
         const value = src[start..pos];
 
         switch (value.len) {
-            2 => {
-                switch (@as(u16, @bitCast(value[0..2].*))) {
-                    FN_BIT => return self.createSimpleToken("FN", value),
-                    IF_BIT => return self.createSimpleToken("IF", value),
-                    OR_BIT => return self.createSimpleToken("OR", value),
-                    else => {},
-                }
+            2 => switch (@as(u16, @bitCast(value[0..2].*))) {
+                FN_BIT => return self.createSimpleToken("FN", value),
+                IF_BIT => return self.createSimpleToken("IF", value),
+                OR_BIT => return self.createSimpleToken("OR", value),
+                else => {},
             },
-            3 => {
-                switch (@as(u24, @bitCast(value[0..3].*))) {
-                    AND_BIT => return self.createSimpleToken("AND", value),
-                    VAR_BIT => return self.createSimpleToken("VAR", value),
-                    else => {},
-                }
+            3 => switch (@as(u24, @bitCast(value[0..3].*))) {
+                AND_BIT => return self.createSimpleToken("AND", value),
+                VAR_BIT => return self.createSimpleToken("VAR", value),
+                else => {},
             },
-            4 => {
-                switch (@as(u32, @bitCast(value[0..4].*))) {
-                    ELSE_BIT => return self.createSimpleToken("ELSE", value),
-                    NULL_BIT => return self.createSimpleToken("NULL", value),
-                    TRUE_BIT => return self.createToken(.{ .BOOLEAN = true }, value),
-                    VOID_BIT => return self.createSimpleToken("VOID", value),
-                    else => {},
-                }
+            4 => switch (@as(u32, @bitCast(value[0..4].*))) {
+                ELSE_BIT => return self.createSimpleToken("ELSE", value),
+                NULL_BIT => return self.createSimpleToken("NULL", value),
+                TRUE_BIT => return self.createToken(.{ .BOOLEAN = true }, value),
+                VOID_BIT => return self.createSimpleToken("VOID", value),
+                else => {},
             },
-            5 => {
-                switch (@as(u40, @bitCast(value[0..5].*))) {
-                    FALSE_BIT => return self.createToken(.{ .BOOLEAN = false }, value),
-                    WHILE_BIT => return self.createSimpleToken("WHILE", value),
-                    PRINT_BIT => return self.createSimpleToken("PRINT", value),
-                    else => {},
-                }
+            5 => switch (@as(u40, @bitCast(value[0..5].*))) {
+                FALSE_BIT => return self.createToken(.{ .BOOLEAN = false }, value),
+                WHILE_BIT => return self.createSimpleToken("WHILE", value),
+                PRINT_BIT => return self.createSimpleToken("PRINT", value),
+                else => {},
             },
-            6 => {
-                switch (@as(u48, @bitCast(value[0..6].*))) {
-                    RETURN_BIT => return self.createSimpleToken("RETURN", value),
-                    else => {},
-                }
+            6 => switch (@as(u48, @bitCast(value[0..6].*))) {
+                RETURN_BIT => return self.createSimpleToken("RETURN", value),
+                else => {},
             },
             else => {},
         }

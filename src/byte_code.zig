@@ -34,6 +34,24 @@ pub fn ByteCode(comptime config: Config) type {
             return self.code.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
         }
 
+        pub fn opJump(self: *Self, op_code: OpCode) !usize {
+            const buf: [3]u8 = [_]u8{@intFromEnum(op_code), 0, 0};
+            try self.code.write(self.allocator, &buf);
+            return self.code.pos;
+        }
+
+        pub fn opJumpTo(self: *Self, jump_pos: usize) !void {
+            std.debug.assert(jump_pos < self.code.pos);
+            const size: usize = self.code.pos - jump_pos;
+            if (size > 65536 ){
+                return error.JumpTooBig;
+            }
+
+            const u16_size: u16 = @intCast(size);
+            const jump_pos_start = jump_pos - 2;
+            @memcpy(self.code.buf[jump_pos_start..jump_pos], std.mem.asBytes(&u16_size));
+        }
+
         pub fn @"i64"(self: *Self, value: i64) !void {
             var buf: [9]u8 = undefined;
             buf[0] = @intFromEnum(OpCode.CONSTANT_I64);
@@ -60,7 +78,7 @@ pub fn ByteCode(comptime config: Config) type {
             const header = buf[0..4];
             const data_start: u32 = @intCast(self.data.pos);
 
-            // Storing the end, rather than the length, means once less addition we
+            // Storing the end, rather than the length, means one less addition we
             // need to make when running the bytecode
             const data_end: u32 = @intCast(data_start + 4 + value.len);
 
@@ -146,10 +164,14 @@ fn Buffer(comptime initial_size: usize) type {
     };
 }
 
-pub fn disassemble(byte_code: []const u8, writer: anytype) !void {
+pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anytype) !void {
+    const LocalIndex = config.LocalType();
+
     var i: usize = 0;
     const code_length = @as(u32, @bitCast(byte_code[0..4].*));
     const code = byte_code[4 .. code_length + 4];
+
+    const data = byte_code[code_length..];
 
     while (i < code.len) {
         const op_code = std.meta.intToEnum(OpCode, code[i]) catch {
@@ -173,6 +195,33 @@ pub fn disassemble(byte_code: []const u8, writer: anytype) !void {
                 try std.fmt.format(writer, " {d}\n", .{code[i]});
                 i += 1;
             },
+            .CONSTANT_STRING => {
+                const data_start = @as(u32, @bitCast(code[0..4].*));
+                i += 4;
+                const string_start = data_start + 4;
+                const string_end = @as(u32, @bitCast(data[data_start..string_start][0..4].*));
+                try std.fmt.format(writer, " {s}\n", .{data[string_start..string_end]});
+            },
+            .JUMP => {
+                const jump_size = @as(u16, @bitCast(code[0..2].*));
+                try std.fmt.format(writer, " +{d}\n", .{jump_size});
+                i += 2;
+            },
+            .JUMP_IF_FALSE => {
+                const jump_size = @as(u16, @bitCast(code[0..2].*));
+                try std.fmt.format(writer, " +{d}\n", .{jump_size});
+                i += 2;
+            },
+            .SET_LOCAL => {
+                const idx = @as(LocalIndex, @bitCast(code[0..@sizeOf(LocalIndex)].*));
+                try std.fmt.format(writer, " @{d}\n", .{idx});
+                i += @sizeOf(LocalIndex);
+            },
+            .GET_LOCAL => {
+                const idx = @as(LocalIndex, @bitCast(code[0..@sizeOf(LocalIndex)].*));
+                try std.fmt.format(writer, " @{d}\n", .{idx});
+                i += @sizeOf(LocalIndex);
+            },
             else => try writer.writeAll("\n"),
         }
     }
@@ -189,6 +238,8 @@ pub const OpCode = enum(u8) {
     EQUAL,
     GET_LOCAL,
     GREATER,
+    JUMP,
+    JUMP_IF_FALSE,
     LESSER,
     MULTIPLY,
     NEGATE,
@@ -245,6 +296,6 @@ fn expectDisassemble(b: anytype, expected: []const u8) !void {
     const byte_code = try b.toBytes(t.allocator);
     defer t.allocator.free(byte_code);
 
-    try disassemble(byte_code, arr.writer());
+    try disassemble(.{}, byte_code, arr.writer());
     try t.expectString(expected, arr.items);
 }
