@@ -4,7 +4,7 @@ pub const VM = @import("vm.zig").VM;
 pub const Value = @import("value.zig").Value;
 pub const Config = @import("config.zig").Config;
 pub const Compiler = @import("compiler.zig").Compiler;
-pub const disassemble = @import("byte_code").disassemble;
+pub const disassemble = @import("byte_code.zig").disassemble;
 
 pub const Preset = struct {
     pub const small = Config{
@@ -332,6 +332,24 @@ test "elz: logical operators" {
     try t.expectEqual(false, testSimple("return 1 == 3 and (3 == 4 or 4 == 4);").bool);
 }
 
+test "elz: while" {
+    try t.expectEqual(10, testSimple(
+        \\ var i = 0;
+        \\ while (i < 10) {
+        \\   i = i + 1;
+        \\ }
+        \\ return i;
+    ).i64);
+
+    try t.expectEqual(0, testSimple(
+        \\ var i = 0;
+        \\ while (false) {
+        \\   i = i + 1;
+        \\ }
+        \\ return i;
+    ).i64);
+}
+
 test "elz: empty scope"  {
     _ = testSimple("{}"); // doesn't crash, yay!
 }
@@ -355,8 +373,9 @@ fn testSimple(src: []const u8) Value {
     const value = vm.run(byte_code) catch |err| {
         std.debug.print("{any}", .{err});
         if (vm.err) |e| {
-            std.debug.print("{any} {s}", .{ e.err, e.desc });
+            std.debug.print("{any} {s}\n", .{ e.err, e.desc });
         }
+        disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
         unreachable;
     };
 

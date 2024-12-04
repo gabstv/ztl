@@ -154,17 +154,13 @@ pub fn Compiler(comptime config: Config) type {
                     try self.expression();
                     try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
 
-                    const if_jump = try bc.opJump(.JUMP_IF_FALSE);
+                    const if_jump = try bc.prepareJump(.JUMP_IF_FALSE);
                     try bc.op(.POP); // pop the if condition (inside the if block)
 
                     try self.statement();
 
-                    // while (try self.match(.ELSE_IF)) {
-
-                    // }
-
                     if (try self.match(.ELSE)) {
-                        const else_jump = try bc.opJump(.JUMP);
+                        const else_jump = try bc.prepareJump(.JUMP);
                         try bc.op(.POP); // pop the if condition (inside the else block)
                         try self.finalizeJump(if_jump);
                         try self.statement();
@@ -173,6 +169,23 @@ pub fn Compiler(comptime config: Config) type {
                         try bc.op(.POP); // pop the if condition (when false with no else
                         try self.finalizeJump(if_jump);
                     }
+                },
+                .WHILE => {
+                    try self.advance();
+                    const loop_start = bc.currentPos();
+                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
+                    try self.expression();
+                    try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
+
+                    const while_jump = try bc.prepareJump(.JUMP_IF_FALSE);
+                    // pop the result of the condition when it's true
+                    try bc.op(.POP);
+                    try self.statement();
+                    try self.jump(loop_start);
+                    try self.finalizeJump(while_jump);
+
+                    // pop the result of the condition when it's [finally] false
+                    try bc.op(.POP);
                 },
                 .LEFT_BRACE => {
                     try self.advance();
@@ -222,8 +235,15 @@ pub fn Compiler(comptime config: Config) type {
             }
         }
 
-        fn finalizeJump(self: *Self, jump_pos: usize) !void  {
-            self._byte_code.opJumpTo(jump_pos) catch {
+        fn jump(self: *Self, pos: usize) !void  {
+            self._byte_code.jump(pos) catch {
+                self.setError("Jump size exceeded maximum allowed value", null);
+                return error.CompileError;
+            };
+        }
+
+        fn finalizeJump(self: *Self, pos: usize) !void  {
+            self._byte_code.finalizeJump(pos) catch {
                 self.setError("Jump size exceeded maximum allowed value", null);
                 return error.CompileError;
             };
@@ -360,7 +380,7 @@ pub fn Compiler(comptime config: Config) type {
 
             // shortcircuit, the left side is already executed, if it's false, we
             // can skip the rest.
-            const end_pos = try bc.opJump(.JUMP_IF_FALSE);
+            const end_pos = try bc.prepareJump(.JUMP_IF_FALSE);
             try bc.op(.POP);
             try self.parsePrecedence(.AND);
             try self.finalizeJump(end_pos);
@@ -375,8 +395,8 @@ pub fn Compiler(comptime config: Config) type {
             // be skipped, and we'll execute the JUMP, which will skip the
             // right of the conditions. In other words, the JUMP_IS_FALSE only
             // exists to jump over the JUMP, which exists to shortcircuit on true.
-            const else_pos = try bc.opJump(.JUMP_IF_FALSE);
-            const end_pos = try bc.opJump(.JUMP);
+            const else_pos = try bc.prepareJump(.JUMP_IF_FALSE);
+            const end_pos = try bc.prepareJump(.JUMP);
             try self.finalizeJump(else_pos);
             try bc.op(.POP);
             try self.parsePrecedence(.OR);

@@ -26,6 +26,10 @@ pub fn ByteCode(comptime config: Config) type {
             self.data = .{};
         }
 
+        pub fn currentPos(self: *const Self) usize {
+            return self.code.pos;
+        }
+
         pub fn op(self: *Self, op_code: OpCode) !void {
             return self.code.write(self.allocator, &.{@intFromEnum(op_code)});
         }
@@ -34,22 +38,33 @@ pub fn ByteCode(comptime config: Config) type {
             return self.code.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
         }
 
-        pub fn opJump(self: *Self, op_code: OpCode) !usize {
-            const buf: [3]u8 = [_]u8{@intFromEnum(op_code), 0, 0};
-            try self.code.write(self.allocator, &buf);
-            return self.code.pos;
-        }
-
-        pub fn opJumpTo(self: *Self, jump_pos: usize) !void {
-            std.debug.assert(jump_pos < self.code.pos);
-            const size: usize = self.code.pos - jump_pos;
-            if (size > 65536 ){
+        pub fn jump(self: *Self, to: usize) !void {
+            if (to > 65536 ){
                 return error.JumpTooBig;
             }
 
-            const u16_size: u16 = @intCast(size);
-            const jump_pos_start = jump_pos - 2;
-            @memcpy(self.code.buf[jump_pos_start..jump_pos], std.mem.asBytes(&u16_size));
+            var buf: [3]u8 = undefined;
+            buf[0] = @intFromEnum(OpCode.JUMP);
+
+            const u16_to: u16 = @intCast(to);
+            @memcpy(buf[1..], std.mem.asBytes(&u16_to));
+            try self.code.write(self.allocator, &buf);
+        }
+
+        pub fn prepareJump(self: *Self, op_code: OpCode) !usize {
+            const buf: [3]u8 = [_]u8{@intFromEnum(op_code), 0, 0};
+            try self.code.write(self.allocator, &buf);
+            return self.code.pos - 2;
+        }
+
+        pub fn finalizeJump(self: *Self, jump_pos: usize) !void {
+            const pos = self.code.pos;
+            if (pos > 65536 ){
+                return error.JumpTooBig;
+            }
+
+            const u16_pos: u16 = @intCast(pos);
+            @memcpy(self.code.buf[jump_pos..jump_pos+2], std.mem.asBytes(&u16_pos));
         }
 
         pub fn @"i64"(self: *Self, value: i64) !void {
@@ -192,24 +207,24 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 i += 8;
             },
             .CONSTANT_BOOL => {
-                try std.fmt.format(writer, " {d}\n", .{code[i]});
+                try std.fmt.format(writer, " {any}\n", .{code[i] == 1});
                 i += 1;
             },
             .CONSTANT_STRING => {
-                const data_start = @as(u32, @bitCast(code[0..4].*));
+                const data_start = @as(u32, @bitCast(code[i..i+4][0..4].*));
                 i += 4;
                 const string_start = data_start + 4;
                 const string_end = @as(u32, @bitCast(data[data_start..string_start][0..4].*));
                 try std.fmt.format(writer, " {s}\n", .{data[string_start..string_end]});
             },
             .JUMP => {
-                const jump_size = @as(u16, @bitCast(code[0..2].*));
-                try std.fmt.format(writer, " +{d}\n", .{jump_size});
+                const pos = @as(u16, @bitCast(code[i..i+2][0..2].*));
+                try std.fmt.format(writer, " {x:0>4}\n", .{pos});
                 i += 2;
             },
             .JUMP_IF_FALSE => {
-                const jump_size = @as(u16, @bitCast(code[0..2].*));
-                try std.fmt.format(writer, " +{d}\n", .{jump_size});
+                const pos = @as(u16, @bitCast(code[i..i+2][0..2].*));
+                try std.fmt.format(writer, " {x:0>4}\n", .{pos});
                 i += 2;
             },
             .SET_LOCAL => {
@@ -281,8 +296,8 @@ test "bytecode: write + disassemble" {
     try expectDisassemble(b,
         \\0000 CONSTANT_I64 -388491034
         \\0009 CONSTANT_F64 12.34567
-        \\0012 CONSTANT_BOOL 1
-        \\0014 CONSTANT_BOOL 0
+        \\0012 CONSTANT_BOOL true
+        \\0014 CONSTANT_BOOL false
         \\0016 CONSTANT_NULL
         \\0017 RETURN
         \\

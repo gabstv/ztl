@@ -30,9 +30,10 @@ pub const VM = struct {
     }
 
     pub fn run(self: *VM, byte_code: []const u8) !Value {
-        var ip = byte_code.ptr;
+
         self._stack_pointer = &self._stack;
 
+        var ip = byte_code.ptr;
         const code_length = @as(u32, @bitCast(ip[0..4].*));
         ip += 4;
 
@@ -40,6 +41,7 @@ pub const VM = struct {
             return .{.null = {}};
         }
 
+        const start = ip;
         const data = ip[code_length..];
 
         while (true) {
@@ -84,31 +86,31 @@ pub const VM = struct {
                 .MULTIPLY => try self.arithmetic(&multiply),
                 .DIVIDE => try self.arithmetic(&divide),
                 .NEGATE => {
-                    const ptr = self.values();
-                    switch (ptr[0]) {
-                        .i64 => |n| ptr[0].i64 = -n,
-                        .f64 => |n| ptr[0].f64 = -n,
-                        else => return self.setErrorFmt(error.TypeError, "Cannot negate non-numeric value: -{s}", .{ptr[0]}),
+                    const v = self.values();
+                    switch (v[0]) {
+                        .i64 => |n| v[0].i64 = -n,
+                        .f64 => |n| v[0].f64 = -n,
+                        else => return self.setErrorFmt(error.TypeError, "Cannot negate non-numeric value: -{s}", .{v[0]}),
                     }
                 },
                 .NOT => {
-                    const ptr = self.values();
-                    switch (ptr[0]) {
-                        .bool => |b| ptr[0].bool = !b,
-                        else => return self.setErrorFmt(error.TypeError, "Cannot not non-booleaning value: !{s}", .{ptr[0]}),
+                    const v = self.values();
+                    switch (v[0]) {
+                        .bool => |b| v[0].bool = !b,
+                        else => return self.setErrorFmt(error.TypeError, "Cannot not non-booleaning value: !{s}", .{v[0]}),
                     }
                 },
                 .EQUAL => try self.comparison(&equal),
                 .GREATER => try self.comparison(&greater),
                 .LESSER => try self.comparison(&lesser),
-                .JUMP => ip += 2 + @as(u16, @bitCast(ip[0..2].*)),
+                .JUMP => ip = start + @as(u16, @bitCast(ip[0..2].*)),
                 .JUMP_IF_FALSE => {
                     if (self.peek().isTrue()) {
                         // just skip the jump address
                         ip += 2;
                     } else {
                         // skip the jump address + the nested code
-                        ip += 2 + @as(u16, @bitCast(ip[0..2].*));
+                        ip = start + @as(u16, @bitCast(ip[0..2].*));
                     }
                 },
                 .PRINT => std.debug.print("{}\n", .{self.pop()}),
