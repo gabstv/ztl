@@ -5,16 +5,19 @@ const Config = @import("config.zig").Config;
 
 pub fn ByteCode(comptime config: Config) type {
     return struct {
+        temp: Buffer(config.initial_code_size),
         code: Buffer(config.initial_code_size),
         data: Buffer(config.initial_data_size),
         allocator: Allocator,
 
         const LocalIndex = config.LocalType();
+        const SL = @sizeOf(LocalIndex);
 
         const Self = @This();
 
         pub fn init(allocator: Allocator) !Self {
             return .{
+                .temp = .{ },
                 .code = .{ },
                 .data = .{ },
                 .allocator = allocator,
@@ -22,6 +25,7 @@ pub fn ByteCode(comptime config: Config) type {
         }
 
         pub fn reset(self: *Self) void {
+            self.temp = .{};
             self.code = .{};
             self.data = .{};
         }
@@ -36,6 +40,26 @@ pub fn ByteCode(comptime config: Config) type {
 
         pub fn op2(self: *Self, op_code1: OpCode, op_code2: OpCode) !void {
             return self.code.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
+        }
+
+        // Pretty unsafe. If any jumps are issued, the positioning will be messed up
+        // Currently only used to capture the increment portion of the FOR loop
+        // and to then stick it at the end of the block
+        pub fn beginCapture(self: *Self) void {
+            std.debug.assert(self.temp.pos == 0);
+            self.temp = self.code;
+            self.code = .{};
+        }
+
+        pub fn endCapture(self: *Self) []const u8 {
+            const code = self.code.buf[0..self.code.pos];
+            self.code = self.temp;
+            self.temp = .{};
+            return code;
+        }
+
+        pub fn write(self: *Self, data: []const u8) !void {
+            return self.code.write(self.allocator, data);
         }
 
         pub fn jump(self: *Self, to: usize) !void {
@@ -93,9 +117,9 @@ pub fn ByteCode(comptime config: Config) type {
             const header = buf[0..4];
             const data_start: u32 = @intCast(self.data.pos);
 
-            // Storing the end, rather than the length, means one less addition we
-            // need to make when running the bytecode
-            const data_end: u32 = @intCast(data_start + 4 + value.len);
+            // Storing the end, rather than the length, means one less addition
+            // the VM has to do. +4 to skip the data length header itself.
+            const data_end: u32 = @intCast(4 + data_start + value.len);
 
             @memcpy(header, std.mem.asBytes(&data_end));
             try self.data.write(self.allocator, header);
@@ -111,16 +135,24 @@ pub fn ByteCode(comptime config: Config) type {
         }
 
         pub fn setLocal(self: *Self, local_index: LocalIndex) !void {
-            var buf: [1 + @sizeOf(LocalIndex)]u8 = undefined;
+            var buf: [1 + SL]u8 = undefined;
             buf[0] = @intFromEnum(OpCode.SET_LOCAL);
             @memcpy(buf[1..], std.mem.asBytes(&local_index));
             return self.code.write(self.allocator, &buf);
         }
 
         pub fn getLocal(self: *Self, local_index: LocalIndex) !void {
-            var buf: [1 + @sizeOf(LocalIndex)]u8 = undefined;
+            var buf: [1 + SL]u8 = undefined;
             buf[0] = @intFromEnum(OpCode.GET_LOCAL);
             @memcpy(buf[1..], std.mem.asBytes(&local_index));
+            return self.code.write(self.allocator, &buf);
+        }
+
+        pub fn incr(self: *Self, local_index: LocalIndex, up: bool) !void {
+            var buf: [2 + SL]u8 = undefined;
+            buf[0] = @intFromEnum(OpCode.INCR);
+            buf[1] = if (up) 1 else 0;
+            @memcpy(buf[2..2 + SL], std.mem.asBytes(&local_index));
             return self.code.write(self.allocator, &buf);
         }
 
@@ -181,12 +213,12 @@ fn Buffer(comptime initial_size: usize) type {
 
 pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anytype) !void {
     const LocalIndex = config.LocalType();
+    const SL = @sizeOf(LocalIndex);
 
     var i: usize = 0;
     const code_length = @as(u32, @bitCast(byte_code[0..4].*));
     const code = byte_code[4 .. code_length + 4];
-
-    const data = byte_code[code_length..];
+    const data = byte_code[code_length + 4..];
 
     while (i < code.len) {
         const op_code = std.meta.intToEnum(OpCode, code[i]) catch {
@@ -211,11 +243,11 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 i += 1;
             },
             .CONSTANT_STRING => {
-                const data_start = @as(u32, @bitCast(code[i..i+4][0..4].*));
+                const header_start = @as(u32, @bitCast(code[i..i+4][0..4].*));
                 i += 4;
-                const string_start = data_start + 4;
-                const string_end = @as(u32, @bitCast(data[data_start..string_start][0..4].*));
-                try std.fmt.format(writer, " {s}\n", .{data[string_start..string_end]});
+                const header_end = header_start + 4;
+                const string_end = @as(u32, @bitCast(data[header_start..header_end][0..4].*));
+                try std.fmt.format(writer, " {s}\n", .{data[header_end..string_end]});
             },
             .JUMP => {
                 const pos = @as(u16, @bitCast(code[i..i+2][0..2].*));
@@ -228,14 +260,21 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 i += 2;
             },
             .SET_LOCAL => {
-                const idx = @as(LocalIndex, @bitCast(code[0..@sizeOf(LocalIndex)].*));
+                const idx = @as(LocalIndex, @bitCast(code[i..i+SL][0..SL].*));
                 try std.fmt.format(writer, " @{d}\n", .{idx});
-                i += @sizeOf(LocalIndex);
+                i += SL;
             },
             .GET_LOCAL => {
-                const idx = @as(LocalIndex, @bitCast(code[0..@sizeOf(LocalIndex)].*));
+                const idx = @as(LocalIndex, @bitCast(code[i..i+SL][0..SL].*));
                 try std.fmt.format(writer, " @{d}\n", .{idx});
-                i += @sizeOf(LocalIndex);
+                i += SL;
+            },
+            .INCR => {
+                const value = if (code[i] == 1) "+1" else "-1";
+                i += 1;
+                const idx = @as(LocalIndex, @bitCast(code[i..i+SL][0..SL].*));
+                i += SL;
+                try std.fmt.format(writer, " @{d} {s}\n", .{idx, value});
             },
             else => try writer.writeAll("\n"),
         }
@@ -243,27 +282,28 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
 }
 
 pub const OpCode = enum(u8) {
-    ADD,
-    CONSTANT_BOOL,
-    CONSTANT_F64,
-    CONSTANT_I64,
-    CONSTANT_NULL,
-    CONSTANT_STRING,
-    DIVIDE,
-    EQUAL,
-    GET_LOCAL,
-    GREATER,
-    JUMP,
-    JUMP_IF_FALSE,
-    LESSER,
-    MULTIPLY,
-    NEGATE,
-    NOT,
-    POP,
-    PRINT,
-    RETURN,
-    SET_LOCAL,
-    SUBTRACT,
+    ADD = 0,
+    CONSTANT_BOOL = 1,
+    CONSTANT_F64 = 2,
+    CONSTANT_I64 = 3,
+    CONSTANT_NULL = 4,
+    CONSTANT_STRING = 5,
+    DIVIDE = 6,
+    EQUAL = 7,
+    GET_LOCAL = 8,
+    GREATER = 10,
+    INCR = 11,
+    JUMP = 12,
+    JUMP_IF_FALSE = 13,
+    LESSER = 14,
+    MULTIPLY = 15,
+    NEGATE = 16,
+    NOT = 17,
+    POP = 18,
+    PRINT = 19,
+    RETURN = 20,
+    SET_LOCAL = 21,
+    SUBTRACT = 22,
 };
 
 const t = @import("t.zig");

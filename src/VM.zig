@@ -113,6 +113,17 @@ pub const VM = struct {
                         ip = start + @as(u16, @bitCast(ip[0..2].*));
                     }
                 },
+                .INCR => {
+                    const incr: i64 = if (ip[0] == 1) 1 else -1;
+                    ip += 1;
+
+                    const idx = ip[0];
+                    ip += 1;
+
+                    const v = try self.add(self._stack[idx], .{.i64 = incr});
+                    self.push(v);
+                    self._stack[idx] = v;
+                },
                 .PRINT => std.debug.print("{}\n", .{self.pop()}),
                 .POP => _ = self.pop(),
                 .RETURN => return self.pop(),
@@ -140,7 +151,6 @@ pub const VM = struct {
         // The final result being sp -= 1;
         // We can jump immediately to sp - 1, and grab sp[-1] (left) and sp[0] (right)
         // which puts our result in sp[0].
-        // (Zig doesn't yet support negative indexes, so we use this ptrFromInt stuff)
         self._stack_pointer -= 1;
         const ptr = self.values();
         const result = try operation(self, ptr[0], ptr[1]);

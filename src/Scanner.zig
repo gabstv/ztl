@@ -7,15 +7,16 @@ const AND_BIT = @as(u24, @bitCast([3]u8{ 'a', 'n', 'd' }));
 const ELSE_BIT = @as(u32, @bitCast([4]u8{ 'e', 'l', 's', 'e' }));
 const FALSE_BIT = @as(u40, @bitCast([5]u8{ 'f', 'a', 'l', 's', 'e' }));
 const FN_BIT = @as(u16, @bitCast([2]u8{ 'f', 'n' }));
+const FOR_BIT = @as(u24, @bitCast([3]u8{ 'f', 'o', 'r' }));
 const IF_BIT = @as(u16, @bitCast([2]u8{ 'i', 'f' }));
 const NULL_BIT = @as(u32, @bitCast([4]u8{ 'n', 'u', 'l', 'l' }));
 const OR_BIT = @as(u16, @bitCast([2]u8{ 'o', 'r' }));
+const PRINT_BIT = @as(u40, @bitCast([5]u8{ 'p', 'r', 'i', 'n', 't' }));
 const RETURN_BIT = @as(u48, @bitCast([6]u8{ 'r', 'e', 't', 'u', 'r', 'n' }));
 const TRUE_BIT = @as(u32, @bitCast([4]u8{ 't', 'r', 'u', 'e' }));
 const VAR_BIT = @as(u24, @bitCast([3]u8{ 'v', 'a', 'r' }));
 const VOID_BIT = @as(u32, @bitCast([4]u8{ 'v', 'o', 'i', 'd' }));
 const WHILE_BIT = @as(u40, @bitCast([5]u8{ 'w', 'h', 'i', 'l', 'e' }));
-const PRINT_BIT = @as(u40, @bitCast([5]u8{ 'p', 'r', 'i', 'n', 't' }));
 
 const ScanError = error {
     ScanError,
@@ -70,8 +71,28 @@ pub const Scanner = struct {
                 ')' => return self.createSimpleToken("RIGHT_PARENTHESIS", ")"),
                 ',' => return self.createSimpleToken("COMMA", ","),
                 '.' => return self.createSimpleToken("DOT", "."),
-                '+' => return self.createSimpleToken("PLUS", "+"),
-                '-' => return self.createSimpleToken("MINUS", "-"),
+                '+' => {
+                    if (self.at(pos) == '+') {
+                        pos += 1;
+                        return self.createSimpleToken("PLUS_PLUS", "++");
+                    }
+                    if (self.at(pos) == '=') {
+                        pos += 1;
+                        return self.createSimpleToken("PLUS_EQUAL", "+=");
+                    }
+                    return self.createSimpleToken("PLUS", "+");
+                },
+                '-' => {
+                    if (self.at(pos) == '-') {
+                        pos += 1;
+                        return self.createSimpleToken("MINUS_MINUS", "--");
+                    }
+                    if (self.at(pos) == '=') {
+                        pos += 1;
+                        return self.createSimpleToken("MINUS_EQUAL", "-=");
+                    }
+                    return self.createSimpleToken("MINUS", "-");
+                },
                 '*' => return self.createSimpleToken("STAR", "*"),
                 ';' => return self.createSimpleToken("SEMICOLON", ";"),
                 '/' => {
@@ -312,6 +333,7 @@ pub const Scanner = struct {
             3 => switch (@as(u24, @bitCast(value[0..3].*))) {
                 AND_BIT => return self.createSimpleToken("AND", value),
                 VAR_BIT => return self.createSimpleToken("VAR", value),
+                FOR_BIT => return self.createSimpleToken("FOR", value),
                 else => {},
             },
             4 => switch (@as(u32, @bitCast(value[0..4].*))) {
@@ -388,6 +410,7 @@ pub const Token = struct {
         EQUAL_EQUAL,
         FLOAT: f64,
         FN,
+        FOR,
         GREATER,
         GREATER_EQUAL,
         IDENTIFIER: []const u8,
@@ -399,9 +422,13 @@ pub const Token = struct {
         LESSER,
         LESSER_EQUAL,
         MINUS,
+        MINUS_EQUAL,
+        MINUS_MINUS,
         NULL,
         OR,
         PLUS,
+        PLUS_EQUAL,
+        PLUS_PLUS,
         PRINT,
         RETURN,
         RIGHT_BRACE,
@@ -430,6 +457,7 @@ pub const Token = struct {
         EQUAL_EQUAL,
         FLOAT,
         FN,
+        FOR,
         GREATER,
         GREATER_EQUAL,
         IDENTIFIER,
@@ -441,9 +469,13 @@ pub const Token = struct {
         LESSER,
         LESSER_EQUAL,
         MINUS,
+        MINUS_EQUAL,
+        MINUS_MINUS,
         NULL,
         OR,
         PLUS,
+        PLUS_EQUAL,
+        PLUS_PLUS,
         PRINT,
         RETURN,
         RIGHT_BRACE,

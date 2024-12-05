@@ -224,6 +224,38 @@ test "elz: comparison string" {
     try t.expectEqual(false, testSimple("return `ABC` >= `abc`;").bool);
 }
 
+test "elz: increment/decrement" {
+    try t.expectEqual(4, testSimple(
+        \\ var i = 0;
+        \\ i++;
+        \\ i++;
+        \\ i++;
+        \\ i--;
+        \\ i++;
+        \\ return i++;
+    ).i64);
+
+    try t.expectEqual(6, testSimple(
+        \\ var x = 2;
+        \\ x += 4;
+        \\ return x ;
+    ).i64);
+
+    try t.expectEqual(6, testSimple(
+        \\ var x = 2;
+        \\ x += 4;
+        \\ return x ;
+    ).i64);
+
+    try t.expectEqual(-2, testSimple(
+        \\ var x = 2;
+        \\ x -= 4;
+        \\ return x ;
+    ).i64);
+
+    try testError("Expected semicolon (';'), got '++' (PLUS_PLUS)", "return 100++;");
+}
+
 test "elz: variables" {
     defer t.reset();
 
@@ -336,7 +368,7 @@ test "elz: while" {
     try t.expectEqual(10, testSimple(
         \\ var i = 0;
         \\ while (i < 10) {
-        \\   i = i + 1;
+        \\   i++;
         \\ }
         \\ return i;
     ).i64);
@@ -345,6 +377,58 @@ test "elz: while" {
         \\ var i = 0;
         \\ while (false) {
         \\   i = i + 1;
+        \\ }
+        \\ return i;
+    ).i64);
+}
+
+test "elz: for" {
+    try t.expectEqual(10, testSimple(
+        \\ var i = 0;
+        \\ for (var x = 0; x < 10; x = x + 1) {
+        \\   i = i + 1;
+        \\ }
+        \\ return i;
+    ).i64);
+
+    try t.expectEqual(2, testSimple(
+        \\ var i = 10;
+        \\ for (var x = 10; x > 2; x = x - 1) {
+        \\   i = i - 1;
+        \\ }
+        \\ return i;
+    ).i64);
+
+    // test various incerment/decrement while we're here (++ and --)
+    try t.expectEqual(10, testSimple(
+        \\ var i = 0;
+        \\ for (var x = 0; x < 10; x++) {
+        \\   i++;
+        \\ }
+        \\ return i;
+    ).i64);
+
+    try t.expectEqual(2, testSimple(
+        \\ var i = 10;
+        \\ for (var x = 10; x > 2; x--) {
+        \\   i--;
+        \\ }
+        \\ return i;
+    ).i64);
+
+    // test various incerment/decrement while we're here (+= and -=)
+    try t.expectEqual(8, testSimple(
+        \\ var i = 0;
+        \\ for (var x = 0; x < 10; x += 3) {
+        \\   i += 2;
+        \\ }
+        \\ return i;
+    ).i64);
+
+    try t.expectEqual(4, testSimple(
+        \\ var i = 10;
+        \\ for (var x = 10; x > 2; x -= 3) {
+        \\   i -= 2;
         \\ }
         \\ return i;
     ).i64);
@@ -365,7 +449,7 @@ fn testSimple(src: []const u8) Value {
 
     const byte_code = c.byteCode(t.allocator) catch unreachable;
     defer t.allocator.free(byte_code);
-    // disassemble(byte_code, std.io.getStdOut().writer()) catch unreachable;
+    // disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
     var vm = VM.init(t.allocator);
     defer vm.deinit();

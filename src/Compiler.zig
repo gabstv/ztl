@@ -102,8 +102,9 @@ pub fn Compiler(comptime config: Config) type {
             }
             return self.advance();
         }
+
         fn consumeSemicolon(self: *Self) !void {
-            return self.consume(.SEMICOLON, "semicolon (',')");
+            return self.consume(.SEMICOLON, "semicolon (';')");
         }
 
         fn match(self: *Self, expected: Token.Type) !bool {
@@ -118,75 +119,41 @@ pub fn Compiler(comptime config: Config) type {
             switch (self._current_token.value) {
                 .VAR => {
                     try self.advance();
-                    try self.consume(.IDENTIFIER, "variable name");
-
-                    const variable_name = self._previous_token.value.IDENTIFIER;
-                    // TODO: check self._locals for a variable with the same name
-                    // in the same scope. Start at _locals[_local_count - 1] and work
-                    // backwards, until we find a conflict, or the scope chang
-                    var locals = &self._locals;
-                    if (locals.items.len == config.max_locals) {
-                        try self.setErrorFmt("maximum number of local variable ({d}) exceeded", .{config.max_locals}, null);
-                        return error.CompileError;
-                    }
-                    try locals.append(self._arena, .{
-                        .depth = null, // can't be used until after the expression
-                        .name = variable_name,
-                    });
-
-                    try self.consume(.EQUAL, "assignment operator ('=')");
-                    try self.expression();
-                    try self.consumeSemicolon();
-
-                    // prevents things like: var count = count + 1;
-                    locals.items[locals.items.len - 1].depth = self._scope_depth;
+                    return self.variableDeclaration();
                 },
                 else => return self.statement(),
             }
         }
 
+        fn variableDeclaration(self: *Self) CompileError!void {
+            // "var" already consumed
+            try self.consume(.IDENTIFIER, "variable name");
+
+            const variable_name = self._previous_token.value.IDENTIFIER;
+            // TODO: check self._locals for a variable with the same name
+            // in the same scope. Start at _locals[_local_count - 1] and work
+            // backwards, until we find a conflict, or the scope chang
+            var locals = &self._locals;
+            if (locals.items.len == config.max_locals) {
+                try self.setErrorFmt("maximum number of local variable ({d}) exceeded", .{config.max_locals}, null);
+                return error.CompileError;
+            }
+            try locals.append(self._arena, .{
+                .depth = null, // can't be used until after the expression
+                .name = variable_name,
+            });
+
+            try self.consume(.EQUAL, "assignment operator ('=')");
+            try self.expression();
+            try self.consumeSemicolon();
+
+            // prevents things like: var count = count + 1;
+            locals.items[locals.items.len - 1].depth = self._scope_depth;
+        }
+
         fn statement(self: *Self) CompileError!void {
             var bc = &self._byte_code;
             switch (self._current_token.value) {
-                .IF => {
-                    try self.advance();
-                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
-                    try self.expression();
-                    try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
-
-                    const if_jump = try bc.prepareJump(.JUMP_IF_FALSE);
-                    try bc.op(.POP); // pop the if condition (inside the if block)
-
-                    try self.statement();
-
-                    if (try self.match(.ELSE)) {
-                        const else_jump = try bc.prepareJump(.JUMP);
-                        try bc.op(.POP); // pop the if condition (inside the else block)
-                        try self.finalizeJump(if_jump);
-                        try self.statement();
-                        try self.finalizeJump(else_jump);
-                    } else {
-                        try bc.op(.POP); // pop the if condition (when false with no else
-                        try self.finalizeJump(if_jump);
-                    }
-                },
-                .WHILE => {
-                    try self.advance();
-                    const loop_start = bc.currentPos();
-                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
-                    try self.expression();
-                    try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
-
-                    const while_jump = try bc.prepareJump(.JUMP_IF_FALSE);
-                    // pop the result of the condition when it's true
-                    try bc.op(.POP);
-                    try self.statement();
-                    try self.jump(loop_start);
-                    try self.finalizeJump(while_jump);
-
-                    // pop the result of the condition when it's [finally] false
-                    try bc.op(.POP);
-                },
                 .LEFT_BRACE => {
                     try self.advance();
                     const scope = self._scope_depth;
@@ -210,6 +177,101 @@ pub fn Compiler(comptime config: Config) type {
                             locals.clearRetainingCapacity();
                         }
                     }
+                },
+                .IF => {
+                    try self.advance();
+                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
+                    try self.expression();
+                    try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
+
+                    const if_jump = try bc.prepareJump(.JUMP_IF_FALSE);
+                    try bc.op(.POP); // pop the if condition (inside the if block)
+
+                    try self.statement();
+
+                    if (try self.match(.ELSE)) {
+                        const else_jump = try bc.prepareJump(.JUMP);
+                        try bc.op(.POP); // pop the if condition (inside the else block)
+                        try self.finalizeJump(if_jump);
+                        try self.statement();
+                        try self.finalizeJump(else_jump);
+                    } else {
+                        try bc.op(.POP); // pop the if condition (when false with no else
+                        try self.finalizeJump(if_jump);
+                    }
+                },
+                .FOR => {
+                    try self.advance();
+                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
+
+                    // initializer variable needs its own scope
+                    const scope = self._scope_depth;
+                    self._scope_depth = scope + 1;
+
+                    if (try self.match(.VAR)) {
+                        try self.variableDeclaration();
+                    } else if (try self.match(.SEMICOLON) == false) {
+                        try self.expression();
+                        try self.consumeSemicolon();
+                        try bc.op(.POP);
+                    }
+
+                    // this is where we jump back to after every loop
+                    const loop_start = bc.currentPos();
+
+                    var jump_loop: ?usize = null;
+                    if (try self.match(.SEMICOLON) == false) {
+                        // we have a condition!
+                        try self.expression();
+                        try self.consumeSemicolon();
+
+                        jump_loop = try bc.prepareJump(.JUMP_IF_FALSE);
+                        try bc.op(.POP);
+                    }
+
+                    var incr: []const u8 = &.{};
+                    if (try self.match(.RIGHT_PARENTHESIS) == false) {
+                        // increment
+                        bc.beginCapture();
+                        try self.expression();
+                        try bc.op(.POP);
+                        incr = bc.endCapture();
+                        try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
+                    }
+
+                    // body
+                    try self.statement();
+                    try bc.write(incr);
+
+                    // back to condition check
+                    try self.jump(loop_start);
+
+                    if (jump_loop) |jl| {
+                        // this is where we exit when the condition is false
+                        try self.finalizeJump(jl);
+                        try bc.op(.POP);
+                    }
+
+                    // restore our scope
+                    self._scope_depth = scope;
+
+                },
+                .WHILE => {
+                    try self.advance();
+                    const loop_start = bc.currentPos();
+                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
+                    try self.expression();
+                    try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
+
+                    const while_jump = try bc.prepareJump(.JUMP_IF_FALSE);
+                    // pop the result of the condition when it's true
+                    try bc.op(.POP);
+                    try self.statement();
+                    try self.jump(loop_start);
+                    try self.finalizeJump(while_jump);
+
+                    // pop the result of the condition when it's [finally] false
+                    try bc.op(.POP);
                 },
                 .PRINT => {
                     try self.advance();
@@ -367,11 +429,38 @@ pub fn Compiler(comptime config: Config) type {
                 return error.CompileError;
             };
 
-            if (can_assign and try self.match(.EQUAL)) {
-                try self.expression();
-                try self._byte_code.setLocal(@intCast(idx));
+            const bc = &self._byte_code;
+            if (can_assign) {
+                if (try self.match(.EQUAL)) {
+                    try self.expression();
+                    try bc.setLocal(@intCast(idx));
+                    return;
+                }
+
+                if (try self.match(.PLUS_EQUAL)) {
+                    try bc.getLocal(@intCast(idx));
+                    try self.expression();
+                    try bc.op(.ADD);
+                    try bc.setLocal(@intCast(idx));
+                    return;
+                }
+
+                if (try self.match(.MINUS_EQUAL)) {
+                    try bc.getLocal(@intCast(idx));
+                    try self.expression();
+                    try bc.op(.SUBTRACT);
+                    try bc.setLocal(@intCast(idx));
+                    return;
+                }
+            }
+
+
+            if (try self.match(.PLUS_PLUS)) {
+                try bc.incr(@intCast(idx), true);
+            } else if (try self.match(.MINUS_MINUS)) {
+                try bc.incr(@intCast(idx), false);
             } else {
-                try self._byte_code.getLocal(@intCast(idx));
+                try bc.getLocal(@intCast(idx));
             }
         }
 
@@ -472,7 +561,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.SLASH, C.binary, null, Precedence.FACTOR },
             .{ Token.Type.STAR, C.binary, null, Precedence.FACTOR },
             .{ Token.Type.STRING, null, C.string, Precedence.NONE },
-            .{ Token.Type.VAR, null, C.variable, Precedence.NONE },
+            .{ Token.Type.VAR, null, null, Precedence.NONE },
             // .{Token.Type.WHILE, null, null, Precedence.NONE},
             // .{Token.Type.CLASS, null, null, Precedence.NONE},
             // .{Token.Type.ERROR, null, null, Precedence.NONE},
