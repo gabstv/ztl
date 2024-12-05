@@ -438,6 +438,21 @@ pub fn Compiler(comptime config: Config) type {
                 }
 
                 if (try self.match(.PLUS_EQUAL)) {
+                    switch (self._current_token.value) {
+                        .INTEGER => |n| switch (n) {
+                            -1 => {
+                                try self.advance();
+                                return bc.incr(@intCast(idx), 0);
+                            },
+                            1...10 => {
+                                try self.advance();
+                                return bc.incr(@intCast(idx), @intCast(n));
+                            },
+                            else => {},
+                        },
+                        else => {},
+                    }
+
                     try bc.getLocal(@intCast(idx));
                     try self.expression();
                     try bc.op(.ADD);
@@ -446,6 +461,16 @@ pub fn Compiler(comptime config: Config) type {
                 }
 
                 if (try self.match(.MINUS_EQUAL)) {
+                    switch (self._current_token.value) {
+                        .INTEGER => |n| switch (n) {
+                            1 => {
+                                try self.advance();
+                                return bc.incr(@intCast(idx), 0);
+                            },
+                            else => {},
+                        },
+                        else => {},
+                    }
                     try bc.getLocal(@intCast(idx));
                     try self.expression();
                     try bc.op(.SUBTRACT);
@@ -456,9 +481,9 @@ pub fn Compiler(comptime config: Config) type {
 
 
             if (try self.match(.PLUS_PLUS)) {
-                try bc.incr(@intCast(idx), true);
+                try bc.incr(@intCast(idx), 1);
             } else if (try self.match(.MINUS_MINUS)) {
-                try bc.incr(@intCast(idx), false);
+                try bc.incr(@intCast(idx), 0);
             } else {
                 try bc.getLocal(@intCast(idx));
             }

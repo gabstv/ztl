@@ -148,10 +148,10 @@ pub fn ByteCode(comptime config: Config) type {
             return self.code.write(self.allocator, &buf);
         }
 
-        pub fn incr(self: *Self, local_index: LocalIndex, up: bool) !void {
+        pub fn incr(self: *Self, local_index: LocalIndex, value: u8) !void {
             var buf: [2 + SL]u8 = undefined;
             buf[0] = @intFromEnum(OpCode.INCR);
-            buf[1] = if (up) 1 else 0;
+            buf[1] = value;
             @memcpy(buf[2..2 + SL], std.mem.asBytes(&local_index));
             return self.code.write(self.allocator, &buf);
         }
@@ -270,11 +270,13 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 i += SL;
             },
             .INCR => {
-                const value = if (code[i] == 1) "+1" else "-1";
+                // i += 0 is pretty rare. So use value 0 for -1, which is more
+                // common (i.e. i--)
+                const value: i16 = if (code[i] == 0) -1 else code[i];
                 i += 1;
                 const idx = @as(LocalIndex, @bitCast(code[i..i+SL][0..SL].*));
                 i += SL;
-                try std.fmt.format(writer, " @{d} {s}\n", .{idx, value});
+                try std.fmt.format(writer, " @{d} {d}\n", .{idx, value});
             },
             else => try writer.writeAll("\n"),
         }

@@ -114,7 +114,7 @@ pub const VM = struct {
                     }
                 },
                 .INCR => {
-                    const incr: i64 = if (ip[0] == 1) 1 else -1;
+                    const incr: i64 = if (ip[0] == 0) -1 else ip[0];
                     ip += 1;
 
                     const idx = ip[0];

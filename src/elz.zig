@@ -253,6 +253,17 @@ test "elz: increment/decrement" {
         \\ return x ;
     ).i64);
 
+    // -1, 1...10 have special treatement, so test a range around there
+    inline for (0..20) |i| {
+        const src_pos = std.fmt.comptimePrint("var x = 0;\nx += {d};return x;", .{i});
+        try t.expectEqual(@as(i64, i), testSimple(src_pos).i64);
+
+        const signed: i64 = @intCast(i);
+        const src_neg = std.fmt.comptimePrint("var x = 0;\nx += {d};return x;", .{signed});
+        try t.expectEqual(signed, testSimple(src_neg).i64);
+    }
+
+
     try testError("Expected semicolon (';'), got '++' (PLUS_PLUS)", "return 100++;");
 }
 
