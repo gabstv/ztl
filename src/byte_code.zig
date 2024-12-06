@@ -5,10 +5,10 @@ const Config = @import("config.zig").Config;
 
 pub fn ByteCode(comptime config: Config) type {
     return struct {
+        allocator: Allocator,
         temp: Buffer(config.initial_code_size),
         code: Buffer(config.initial_code_size),
         data: Buffer(config.initial_data_size),
-        allocator: Allocator,
 
         const LocalIndex = config.LocalType();
         const SL = @sizeOf(LocalIndex);

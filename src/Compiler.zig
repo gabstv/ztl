@@ -129,18 +129,25 @@ pub fn Compiler(comptime config: Config) type {
             // "var" already consumed
             try self.consume(.IDENTIFIER, "variable name");
 
-            const variable_name = self._previous_token.value.IDENTIFIER;
-            // TODO: check self._locals for a variable with the same name
-            // in the same scope. Start at _locals[_local_count - 1] and work
-            // backwards, until we find a conflict, or the scope chang
             var locals = &self._locals;
+
             if (locals.items.len == config.max_locals) {
-                try self.setErrorFmt("maximum number of local variable ({d}) exceeded", .{config.max_locals}, null);
+                try self.setErrorFmt("Maximum number of local variable ({d}) exceeded", .{config.max_locals}, null);
                 return error.CompileError;
             }
+
+            const name = self._previous_token.value.IDENTIFIER;
+
+            if (self.localVariableIndex(name)) |idx| {
+                if (locals.items[idx].depth == self._scope_depth) {
+                    try self.setErrorFmt("Variable '{s}' already declared", .{name}, null);
+                    return error.CompileError;
+                }
+            }
+
             try locals.append(self._arena, .{
                 .depth = null, // can't be used until after the expression
-                .name = variable_name,
+                .name = name,
             });
 
             try self.consume(.EQUAL, "assignment operator ('=')");
@@ -407,27 +414,15 @@ pub fn Compiler(comptime config: Config) type {
         fn variable(self: *Self, can_assign: bool) CompileError!void {
             const name = self._previous_token.value.IDENTIFIER;
 
-            const idx = blk: {
-                const locals = self._locals.items;
-                if (locals.len == 0) {
-                    break :blk null;
-                }
-                var idx = locals.len - 1;
-                while (idx >= 0) : (idx -= 1) {
-                    const local = locals[idx];
-                    if (std.mem.eql(u8, name, local.name)) {
-                        if (local.depth == null) {
-                            try self.setErrorFmt("Variable '{s}' used before being initialized", .{name}, null);
-                            return error.CompileError;
-                        }
-                        break :blk idx;
-                    }
-                }
-                break :blk null;
-            } orelse {
+            const idx = self.localVariableIndex(name) orelse {
                 try self.setErrorFmt("Variable '{s}' is unknown", .{name}, null);
                 return error.CompileError;
             };
+
+            if (self._locals.items[idx].depth == null) {
+                try self.setErrorFmt("Variable '{s}' used before being initialized", .{name}, null);
+                return error.CompileError;
+            }
 
             const bc = &self._byte_code;
             if (can_assign) {
@@ -515,6 +510,24 @@ pub fn Compiler(comptime config: Config) type {
             try bc.op(.POP);
             try self.parsePrecedence(.OR);
             try self.finalizeJump(end_pos);
+        }
+
+        fn localVariableIndex(self: *const Self, name: []const u8) ?usize {
+            const locals = self._locals.items;
+            if (locals.len == 0) {
+                return null;
+            }
+
+            var idx = locals.len;
+            while (idx > 0) {
+                idx -= 1;
+                const local = locals[idx];
+                if (std.mem.eql(u8, name, local.name)) {
+                    return idx;
+                }
+            }
+
+            return null;
         }
 
         pub fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {

@@ -27,7 +27,7 @@ test "elz: local limit" {
             \\ var c = 1;
             \\ var d = 1;
         ) catch {
-            try t.expectString("maximum number of local variable (3) exceeded", c.err.?.desc);
+            try t.expectString("Maximum number of local variable (3) exceeded", c.err.?.desc);
             break :blk;
         };
         return error.NoError;
@@ -297,6 +297,11 @@ test "elz: variables" {
     try testError("Variable 'name' used before being initialized", "var name = name + 3;");
     try testError("Variable 'unknown' is unknown", "return unknown;");
     try testError("Expected assignment operator ('='), got '`hello`' (STRING)", "var x `hello`");
+
+    try testError("Variable 'c' already declare",
+        \\ var c = 3;
+        \\ var c = 3;
+    );
 }
 
 test "elz: if" {
@@ -462,7 +467,7 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
 
         const byte_code = try c.byteCode(t.allocator);
         defer t.allocator.free(byte_code);
-        errdefer disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
+        // disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
         var vm = VM(config).init(t.allocator);
         defer vm.deinit();
