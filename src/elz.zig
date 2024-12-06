@@ -44,188 +44,188 @@ test "elz: local limit" {
 }
 
 test "elz: arithmetic" {
-    try t.expectEqual(9, testSimple("return 1 + 8;").i64);
-    try t.expectEqual(-1, testSimple("return 10 - 11;").i64);
-    try t.expectEqual(14, testSimple("return 2 * 7;").i64);
-    try t.expectEqual(2, testSimple("return 18 / 9;").i64);
+    try testReturnValue(.{.i64 = 9}, "return 1 + 8;");
+    try testReturnValue(.{.i64 = -1}, "return 10 - 11;");
+    try testReturnValue(.{.i64 = 14}, "return 2 * 7;");
+    try testReturnValue(.{.i64 = 2}, "return 18 / 9;");
 
-    try t.expectEqual(17, testSimple("return 2 + 5 * 3;").i64);
-    try t.expectEqual(21, testSimple("return (2 + 5) * 3;").i64);
-    try t.expectEqual(13, testSimple("return 2 * 5 + 3;").i64);
+    try testReturnValue(.{.i64 = 17}, "return 2 + 5 * 3;");
+    try testReturnValue(.{.i64 = 21}, "return (2 + 5) * 3;");
+    try testReturnValue(.{.i64 = 13}, "return 2 * 5 + 3;");
 
-    try t.expectEqual(4.5, testSimple("return 1.2 + 3.3;").f64);
-    try t.expectEqual(5.3, testSimple("return 2 + 3.3;").f64);
-    try t.expectEqual(5.3, testSimple("return 3.3 + 2;").f64);
-    try t.expectEqual(1.0, testSimple("return 1.1 - 0.1;").f64);
-    try t.expectEqual(-1.2999999999999998, testSimple("return 2 - 3.3;").f64);
-    try t.expectEqual(1.2999999999999998, testSimple("return 3.3 - 2;").f64);
-    try t.expectEqual(3.9599999999999995, testSimple("return 1.2 * 3.3;").f64);
-    try t.expectEqual(20.4, testSimple("return 5.1 * 4;").f64);
-    try t.expectEqual(20.4, testSimple("return 4 * 5.1;").f64);
-    try t.expectEqual(0.36363636363636365, testSimple("return 1.2 / 3.3;").f64);
-    try t.expectEqual(1.275, testSimple("return 5.1 / 4;").f64);
-    try t.expectEqual(0.7843137254901962, testSimple("return 4 / 5.1;").f64);
+    try testReturnValue(.{.f64 = 4.5}, "return 1.2 + 3.3;");
+    try testReturnValue(.{.f64 = 5.3}, "return 2 + 3.3;");
+    try testReturnValue(.{.f64 = 5.3}, "return 3.3 + 2;");
+    try testReturnValue(.{.f64 = 1.0}, "return 1.1 - 0.1;");
+    try testReturnValue(.{.f64 = -1.2999999999999998}, "return 2 - 3.3;");
+    try testReturnValue(.{.f64 = 1.2999999999999998}, "return 3.3 - 2;");
+    try testReturnValue(.{.f64 = 3.9599999999999995}, "return 1.2 * 3.3;");
+    try testReturnValue(.{.f64 = 20.4}, "return 5.1 * 4;");
+    try testReturnValue(.{.f64 = 20.4}, "return 4 * 5.1;");
+    try testReturnValue(.{.f64 = 0.36363636363636365}, "return 1.2 / 3.3;");
+    try testReturnValue(.{.f64 = 1.275}, "return 5.1 / 4;");
+    try testReturnValue(.{.f64 = 0.7843137254901962}, "return 4 / 5.1;");
 }
 
 test "elz: not" {
-    try t.expectEqual(true, testSimple("return !false;").bool);
-    try t.expectEqual(false, testSimple("return !true;").bool);
+    try testReturnValue(.{.bool = true}, "return !false;");
+    try testReturnValue(.{.bool = false}, "return !true;");
 }
 
 test "elz: comparison int" {
-    try t.expectEqual(true, testSimple("return 1 == 1;").bool);
-    try t.expectEqual(false, testSimple("return 1 == 2;").bool);
-    try t.expectEqual(false, testSimple("return 1 != 1;").bool);
-    try t.expectEqual(true, testSimple("return 1 != 2;").bool);
+    try testReturnValue(.{.bool = true}, "return 1 == 1;");
+    try testReturnValue(.{.bool = false}, "return 1 == 2;");
+    try testReturnValue(.{.bool = false}, "return 1 != 1;");
+    try testReturnValue(.{.bool = true}, "return 1 != 2;");
 
-    try t.expectEqual(false, testSimple("return 1 > 1;").bool);
-    try t.expectEqual(false, testSimple("return 1 > 2;").bool);
-    try t.expectEqual(true, testSimple("return 2 > 1;").bool);
+    try testReturnValue(.{.bool = false}, "return 1 > 1;");
+    try testReturnValue(.{.bool = false}, "return 1 > 2;");
+    try testReturnValue(.{.bool = true}, "return 2 > 1;");
 
-    try t.expectEqual(true, testSimple("return 1 >= 1;").bool);
-    try t.expectEqual(false, testSimple("return 1 >= 2;").bool);
-    try t.expectEqual(true, testSimple("return 2 >= 1;").bool);
+    try testReturnValue(.{.bool = true}, "return 1 >= 1;");
+    try testReturnValue(.{.bool = false}, "return 1 >= 2;");
+    try testReturnValue(.{.bool = true}, "return 2 >= 1;");
 
-    try t.expectEqual(false, testSimple("return 1 < 1;").bool);
-    try t.expectEqual(true, testSimple("return 1 < 2;").bool);
-    try t.expectEqual(false, testSimple("return 2 < 1;").bool);
+    try testReturnValue(.{.bool = false}, "return 1 < 1;");
+    try testReturnValue(.{.bool = true}, "return 1 < 2;");
+    try testReturnValue(.{.bool = false}, "return 2 < 1;");
 
-    try t.expectEqual(true, testSimple("return 1 <= 1;").bool);
-    try t.expectEqual(true, testSimple("return 1 <= 2;").bool);
-    try t.expectEqual(false, testSimple("return 2 <= 1;").bool);
+    try testReturnValue(.{.bool = true}, "return 1 <= 1;");
+    try testReturnValue(.{.bool = true}, "return 1 <= 2;");
+    try testReturnValue(.{.bool = false}, "return 2 <= 1;");
 }
 
 test "elz: comparison float" {
-    try t.expectEqual(true, testSimple("return 1.13 == 1.13;").bool);
-    try t.expectEqual(false, testSimple("return 1.13 == 2.08;").bool);
-    try t.expectEqual(false, testSimple("return 1.13 != 1.13;").bool);
-    try t.expectEqual(true, testSimple("return 1.13 != 2.08;").bool);
+    try testReturnValue(.{.bool = true}, "return 1.13 == 1.13;");
+    try testReturnValue(.{.bool = false}, "return 1.13 == 2.08;");
+    try testReturnValue(.{.bool = false}, "return 1.13 != 1.13;");
+    try testReturnValue(.{.bool = true}, "return 1.13 != 2.08;");
 
-    try t.expectEqual(false, testSimple("return 1.13 > 1.13;").bool);
-    try t.expectEqual(false, testSimple("return 1.13 > 2.08;").bool);
-    try t.expectEqual(true, testSimple("return 2.08 > 1.13;").bool);
+    try testReturnValue(.{.bool = false}, "return 1.13 > 1.13;");
+    try testReturnValue(.{.bool = false}, "return 1.13 > 2.08;");
+    try testReturnValue(.{.bool = true}, "return 2.08 > 1.13;");
 
-    try t.expectEqual(true, testSimple("return 1.13 >= 1.13;").bool);
-    try t.expectEqual(false, testSimple("return 1.13 >= 2.08;").bool);
-    try t.expectEqual(true, testSimple("return 2.08 >= 1.13;").bool);
+    try testReturnValue(.{.bool = true}, "return 1.13 >= 1.13;");
+    try testReturnValue(.{.bool = false}, "return 1.13 >= 2.08;");
+    try testReturnValue(.{.bool = true}, "return 2.08 >= 1.13;");
 
-    try t.expectEqual(false, testSimple("return 1.13 < 1.13;").bool);
-    try t.expectEqual(true, testSimple("return 1.13 < 2.08;").bool);
-    try t.expectEqual(false, testSimple("return 2.08 < 1.13;").bool);
+    try testReturnValue(.{.bool = false}, "return 1.13 < 1.13;");
+    try testReturnValue(.{.bool = true}, "return 1.13 < 2.08;");
+    try testReturnValue(.{.bool = false}, "return 2.08 < 1.13;");
 
-    try t.expectEqual(true, testSimple("return 1.13 <= 1.13;").bool);
-    try t.expectEqual(true, testSimple("return 1.13 <= 2.08;").bool);
-    try t.expectEqual(false, testSimple("return 2.08 <= 1.13;").bool);
+    try testReturnValue(.{.bool = true}, "return 1.13 <= 1.13;");
+    try testReturnValue(.{.bool = true}, "return 1.13 <= 2.08;");
+    try testReturnValue(.{.bool = false}, "return 2.08 <= 1.13;");
 }
 
 test "elz: comparison int - float" {
-    try t.expectEqual(true, testSimple("return 1 == 1.0;").bool);
-    try t.expectEqual(false, testSimple("return 1 == 1.1;").bool);
-    try t.expectEqual(false, testSimple("return 1 != 1.0;").bool);
-    try t.expectEqual(true, testSimple("return 1 != 1.1;").bool);
+    try testReturnValue(.{.bool = true}, "return 1 == 1.0;");
+    try testReturnValue(.{.bool = false}, "return 1 == 1.1;");
+    try testReturnValue(.{.bool = false}, "return 1 != 1.0;");
+    try testReturnValue(.{.bool = true}, "return 1 != 1.1;");
 
-    try t.expectEqual(false, testSimple("return 1 > 1.0;").bool);
-    try t.expectEqual(false, testSimple("return 1 > 2.0;").bool);
-    try t.expectEqual(true, testSimple("return 2 > 1.9;").bool);
+    try testReturnValue(.{.bool = false}, "return 1 > 1.0;");
+    try testReturnValue(.{.bool = false}, "return 1 > 2.0;");
+    try testReturnValue(.{.bool = true}, "return 2 > 1.9;");
 
-    try t.expectEqual(true, testSimple("return 1 >= 1.0;").bool);
-    try t.expectEqual(false, testSimple("return 1 >= 2.0;").bool);
-    try t.expectEqual(true, testSimple("return 2 >= 1.98;").bool);
+    try testReturnValue(.{.bool = true}, "return 1 >= 1.0;");
+    try testReturnValue(.{.bool = false}, "return 1 >= 2.0;");
+    try testReturnValue(.{.bool = true}, "return 2 >= 1.98;");
 
-    try t.expectEqual(false, testSimple("return 1 < 1.0;").bool);
-    try t.expectEqual(true, testSimple("return 1 < 1.01;").bool);
-    try t.expectEqual(false, testSimple("return 2 < 1.99;").bool);
+    try testReturnValue(.{.bool = false}, "return 1 < 1.0;");
+    try testReturnValue(.{.bool = true}, "return 1 < 1.01;");
+    try testReturnValue(.{.bool = false}, "return 2 < 1.99;");
 
-    try t.expectEqual(true, testSimple("return 1 <= 1.0;").bool);
-    try t.expectEqual(true, testSimple("return 1 <= 1.01;").bool);
-    try t.expectEqual(false, testSimple("return 2 <= 1.99;").bool);
+    try testReturnValue(.{.bool = true}, "return 1 <= 1.0;");
+    try testReturnValue(.{.bool = true}, "return 1 <= 1.01;");
+    try testReturnValue(.{.bool = false}, "return 2 <= 1.99;");
 }
 
 test "elz: comparison float - int" {
-    try t.expectEqual(true, testSimple("return 1.0 == 1;").bool);
-    try t.expectEqual(false, testSimple("return 1.1 == 1;").bool);
-    try t.expectEqual(false, testSimple("return 1.0 != 1;").bool);
-    try t.expectEqual(true, testSimple("return 1.1 != 1;").bool);
+    try testReturnValue(.{.bool = true}, "return 1.0 == 1;");
+    try testReturnValue(.{.bool = false}, "return 1.1 == 1;");
+    try testReturnValue(.{.bool = false}, "return 1.0 != 1;");
+    try testReturnValue(.{.bool = true}, "return 1.1 != 1;");
 
-    try t.expectEqual(false, testSimple("return 1.0 > 1;").bool);
-    try t.expectEqual(false, testSimple("return 1.9 > 2;").bool);
-    try t.expectEqual(true, testSimple("return 2.1 > 2;").bool);
+    try testReturnValue(.{.bool = false}, "return 1.0 > 1;");
+    try testReturnValue(.{.bool = false}, "return 1.9 > 2;");
+    try testReturnValue(.{.bool = true}, "return 2.1 > 2;");
 
-    try t.expectEqual(true, testSimple("return 1.0 >= 1;").bool);
-    try t.expectEqual(false, testSimple("return 1.9 >= 2;").bool);
-    try t.expectEqual(true, testSimple("return 2.1 >= 2;").bool);
+    try testReturnValue(.{.bool = true}, "return 1.0 >= 1;");
+    try testReturnValue(.{.bool = false}, "return 1.9 >= 2;");
+    try testReturnValue(.{.bool = true}, "return 2.1 >= 2;");
 
-    try t.expectEqual(false, testSimple("return 1.0 < 1;").bool);
-    try t.expectEqual(true, testSimple("return 0.99 < 1;").bool);
-    try t.expectEqual(false, testSimple("return 2.1 < 2;").bool);
+    try testReturnValue(.{.bool = false}, "return 1.0 < 1;");
+    try testReturnValue(.{.bool = true}, "return 0.99 < 1;");
+    try testReturnValue(.{.bool = false}, "return 2.1 < 2;");
 
-    try t.expectEqual(true, testSimple("return 1.0 <= 1;").bool);
-    try t.expectEqual(true, testSimple("return 3.99 <= 4;").bool);
-    try t.expectEqual(false, testSimple("return 10.1 <= 10;").bool);
+    try testReturnValue(.{.bool = true}, "return 1.0 <= 1;");
+    try testReturnValue(.{.bool = true}, "return 3.99 <= 4;");
+    try testReturnValue(.{.bool = false}, "return 10.1 <= 10;");
 }
 
 test "elz: comparison bool" {
-    try t.expectEqual(true, testSimple("return true == true;").bool);
-    try t.expectEqual(true, testSimple("return false == false;").bool);
-    try t.expectEqual(false, testSimple("return true == false;").bool);
-    try t.expectEqual(false, testSimple("return false == true;").bool);
+    try testReturnValue(.{.bool = true}, "return true == true;");
+    try testReturnValue(.{.bool = true}, "return false == false;");
+    try testReturnValue(.{.bool = false}, "return true == false;");
+    try testReturnValue(.{.bool = false}, "return false == true;");
 
-    try t.expectEqual(false, testSimple("return true != true;").bool);
-    try t.expectEqual(false, testSimple("return false != false;").bool);
-    try t.expectEqual(true, testSimple("return true != false;").bool);
-    try t.expectEqual(true, testSimple("return false != true;").bool);
+    try testReturnValue(.{.bool = false}, "return true != true;");
+    try testReturnValue(.{.bool = false}, "return false != false;");
+    try testReturnValue(.{.bool = true}, "return true != false;");
+    try testReturnValue(.{.bool = true}, "return false != true;");
 }
 
 test "elz: comparison null" {
-    try t.expectEqual(true, testSimple("return null == null;").bool);
-    try t.expectEqual(false, testSimple("return null != null;").bool);
+    try testReturnValue(.{.bool = true}, "return null == null;");
+    try testReturnValue(.{.bool = false}, "return null != null;");
 
-    try t.expectEqual(false, testSimple("return 0 == null;").bool);
-    try t.expectEqual(false, testSimple("return 0.0 == null;").bool);
-    try t.expectEqual(false, testSimple("return 1 == null;").bool);
-    try t.expectEqual(false, testSimple("return 1.1 == null;").bool);
-    try t.expectEqual(false, testSimple("return `` == null;").bool);
-    try t.expectEqual(false, testSimple("return `abc` == null;").bool);
-    try t.expectEqual(false, testSimple("return true == null;").bool);
-    try t.expectEqual(false, testSimple("return false == null;").bool);
+    try testReturnValue(.{.bool = false}, "return 0 == null;");
+    try testReturnValue(.{.bool = false}, "return 0.0 == null;");
+    try testReturnValue(.{.bool = false}, "return 1 == null;");
+    try testReturnValue(.{.bool = false}, "return 1.1 == null;");
+    try testReturnValue(.{.bool = false}, "return `` == null;");
+    try testReturnValue(.{.bool = false}, "return `abc` == null;");
+    try testReturnValue(.{.bool = false}, "return true == null;");
+    try testReturnValue(.{.bool = false}, "return false == null;");
 
-    try t.expectEqual(true, testSimple("return 0 != null;").bool);
-    try t.expectEqual(true, testSimple("return 0.0 != null;").bool);
-    try t.expectEqual(true, testSimple("return 1 != null;").bool);
-    try t.expectEqual(true, testSimple("return 1.1 != null;").bool);
-    try t.expectEqual(true, testSimple("return `` != null;").bool);
-    try t.expectEqual(true, testSimple("return `abc` != null;").bool);
-    try t.expectEqual(true, testSimple("return true != null;").bool);
-    try t.expectEqual(true, testSimple("return false != null;").bool);
+    try testReturnValue(.{.bool = true}, "return 0 != null;");
+    try testReturnValue(.{.bool = true}, "return 0.0 != null;");
+    try testReturnValue(.{.bool = true}, "return 1 != null;");
+    try testReturnValue(.{.bool = true}, "return 1.1 != null;");
+    try testReturnValue(.{.bool = true}, "return `` != null;");
+    try testReturnValue(.{.bool = true}, "return `abc` != null;");
+    try testReturnValue(.{.bool = true}, "return true != null;");
+    try testReturnValue(.{.bool = true}, "return false != null;");
 }
 
 test "elz: comparison string" {
-    try t.expectEqual(true, testSimple("return `abc` == `abc`;").bool);
-    try t.expectEqual(false, testSimple("return `abc` == `123`;").bool);
-    try t.expectEqual(false, testSimple("return `abc` == `ABC`;").bool);
+    try testReturnValue(.{.bool = true}, "return `abc` == `abc`;");
+    try testReturnValue(.{.bool = false}, "return `abc` == `123`;");
+    try testReturnValue(.{.bool = false}, "return `abc` == `ABC`;");
 
-    try t.expectEqual(false, testSimple("return `abc` != `abc`;").bool);
-    try t.expectEqual(true, testSimple("return `abc` != `123`;").bool);
-    try t.expectEqual(true, testSimple("return `abc` != `ABC`;").bool);
+    try testReturnValue(.{.bool = false}, "return `abc` != `abc`;");
+    try testReturnValue(.{.bool = true}, "return `abc` != `123`;");
+    try testReturnValue(.{.bool = true}, "return `abc` != `ABC`;");
 
-    try t.expectEqual(false, testSimple("return `abc` < `abc`;").bool);
-    try t.expectEqual(false, testSimple("return `abc` > `abc`;").bool);
-    try t.expectEqual(true, testSimple("return `abc` <= `abc`;").bool);
-    try t.expectEqual(true, testSimple("return `abc` >= `abc`;").bool);
+    try testReturnValue(.{.bool = false}, "return `abc` < `abc`;");
+    try testReturnValue(.{.bool = false}, "return `abc` > `abc`;");
+    try testReturnValue(.{.bool = true}, "return `abc` <= `abc`;");
+    try testReturnValue(.{.bool = true}, "return `abc` >= `abc`;");
 
-    try t.expectEqual(false, testSimple("return `abc` < `ABC`;").bool);
-    try t.expectEqual(false, testSimple("return `abc` <= `ABC`;").bool);
-    try t.expectEqual(true, testSimple("return `ABC` <= `abc`;").bool);
-    try t.expectEqual(true, testSimple("return `ABC` <= `abc`;").bool);
+    try testReturnValue(.{.bool = false}, "return `abc` < `ABC`;");
+    try testReturnValue(.{.bool = false}, "return `abc` <= `ABC`;");
+    try testReturnValue(.{.bool = true}, "return `ABC` <= `abc`;");
+    try testReturnValue(.{.bool = true}, "return `ABC` <= `abc`;");
 
-    try t.expectEqual(true, testSimple("return `abc` > `ABC`;").bool);
-    try t.expectEqual(true, testSimple("return `abc` >= `ABC`;").bool);
-    try t.expectEqual(false, testSimple("return `ABC` >= `abc`;").bool);
-    try t.expectEqual(false, testSimple("return `ABC` >= `abc`;").bool);
+    try testReturnValue(.{.bool = true}, "return `abc` > `ABC`;");
+    try testReturnValue(.{.bool = true}, "return `abc` >= `ABC`;");
+    try testReturnValue(.{.bool = false}, "return `ABC` >= `abc`;");
+    try testReturnValue(.{.bool = false}, "return `ABC` >= `abc`;");
 }
 
 test "elz: increment/decrement" {
-    try t.expectEqual(4, testSimple(
+    try testReturnValue(.{.i64 = 4},
         \\ var i = 0;
         \\ i++;
         \\ i++;
@@ -233,34 +233,34 @@ test "elz: increment/decrement" {
         \\ i--;
         \\ i++;
         \\ return i++;
-    ).i64);
+    );
 
-    try t.expectEqual(6, testSimple(
+    try testReturnValue(.{.i64 = 6},
         \\ var x = 2;
         \\ x += 4;
         \\ return x ;
-    ).i64);
+    );
 
-    try t.expectEqual(6, testSimple(
+    try testReturnValue(.{.i64 = 6},
         \\ var x = 2;
         \\ x += 4;
         \\ return x ;
-    ).i64);
+    );
 
-    try t.expectEqual(-2, testSimple(
+    try testReturnValue(.{.i64 = -2},
         \\ var x = 2;
         \\ x -= 4;
         \\ return x ;
-    ).i64);
+    );
 
     // -1, 1...10 have special treatement, so test a range around there
     inline for (0..20) |i| {
         const src_pos = std.fmt.comptimePrint("var x = 0;\nx += {d};return x;", .{i});
-        try t.expectEqual(@as(i64, i), testSimple(src_pos).i64);
+        try testReturnValue(.{.i64 = i}, src_pos);
 
         const signed: i64 = @intCast(i);
         const src_neg = std.fmt.comptimePrint("var x = 0;\nx += {d};return x;", .{signed});
-        try t.expectEqual(signed, testSimple(src_neg).i64);
+        try testReturnValue(.{.i64 = signed}, src_neg);
     }
 
 
@@ -268,33 +268,31 @@ test "elz: increment/decrement" {
 }
 
 test "elz: variables" {
-    defer t.reset();
-
-    try t.expectString("Leto", testSimple(
+    try testReturnValue(.{.string = "Leto"},
         \\ var name = `Leto`;
         \\ return name;
-    ).string);
+    );
 
-    try t.expectString("Leto", testSimple(
+    try testReturnValue(.{.string = "Leto"},
         \\ var name = `Leto`;
         \\ {
         \\    var name = "Ghanima" ;
         \\ }
         \\ return name;
-    ).string);
+    );
 
-    try t.expectString("Ghanima", testSimple(
+    try testReturnValue(.{.string = "Ghanima"},
         \\ var name = `Leto`;
         \\ {
         \\    var name = "Ghanima" ;
         \\    return name;
         \\ }
-    ).string);
+    );
 
-    try t.expectEqual(4, testSimple(
+    try testReturnValue(.{.i64 = 4},
         \\ var count = 3;
         \\ return count + 1;
-    ).i64);
+    );
 
     try testError("Variable 'name' used before being initialized", "var name = name + 3;");
     try testError("Variable 'unknown' is unknown", "return unknown;");
@@ -302,39 +300,37 @@ test "elz: variables" {
 }
 
 test "elz: if" {
-    defer t.reset();
-
-    try t.expectEqual(1234, testSimple(
+    try testReturnValue(.{.i64 = 1234},
         \\ if (true) {
         \\   return 1234;
         \\ }
         \\ return 4321;
-    ).i64);
+    );
 
-    try t.expectEqual(4321, testSimple(
+    try testReturnValue(.{.i64 = 4321},
         \\ if (false) {
         \\   return 1234;
         \\ }
         \\ return 4321;
-    ).i64);
+    );
 
-    try t.expectEqual(9, testSimple(
+    try testReturnValue(.{.i64 = 9},
         \\ if (1 == 1) {
         \\   return 9;
         \\ } else {
         \\   return 10;
         \\ }
-    ).i64);
+    );
 
-    try t.expectEqual(10, testSimple(
+    try testReturnValue(.{.i64 = 10},
         \\ if (1 != 1) {
         \\   return 9;
         \\ } else {
         \\   return 10;
         \\ }
-    ).i64);
+    );
 
-    try t.expectEqual(8, testSimple(
+    try testReturnValue(.{.i64 = 8},
         \\ if (1 == 1) {
         \\   return 8;
         \\ } else if (2 == 2) {
@@ -342,9 +338,9 @@ test "elz: if" {
         \\ } else {
         \\   return 10;
         \\ }
-    ).i64);
+    );
 
-    try t.expectEqual(9, testSimple(
+    try testReturnValue(.{.i64 = 9},
         \\ if (1 != 1) {
         \\   return 8;
         \\ } else if (2 == 2) {
@@ -352,9 +348,9 @@ test "elz: if" {
         \\ } else {
         \\   return 10;
         \\ }
-    ).i64);
+    );
 
-    try t.expectEqual(10, testSimple(
+    try testReturnValue(.{.i64 = 10},
         \\ if (1 != 1) {
         \\   return 8;
         \\ } else if (2 != 2) {
@@ -362,124 +358,131 @@ test "elz: if" {
         \\ } else {
         \\   return 10;
         \\ }
-    ).i64);
+    );
 }
 
 test "elz: logical operators" {
-    try t.expectEqual(false, testSimple("return 1 == 1 and 3 == 2;").bool);
-    try t.expectEqual(false, testSimple("return 0 == 1 and 3 == 2;").bool);
-    try t.expectEqual(false, testSimple("return 1 == 3 or 3 == 4;").bool);
-    try t.expectEqual(true, testSimple("return 1 == 1 and 2 == 2;").bool);
-    try t.expectEqual(true, testSimple("return 1 == 1 or 3 == 2;").bool);
-    try t.expectEqual(true, testSimple("return 1 == 3 or 3 == 3;").bool);
-    try t.expectEqual(false, testSimple("return 1 == 3 and (3 == 4 or 4 == 4);").bool);
+    try testReturnValue(.{.bool = false}, "return 1 == 1 and 3 == 2;");
+    try testReturnValue(.{.bool = false}, "return 0 == 1 and 3 == 2;");
+    try testReturnValue(.{.bool = false}, "return 1 == 3 or 3 == 4;");
+    try testReturnValue(.{.bool = true}, "return 1 == 1 and 2 == 2;");
+    try testReturnValue(.{.bool = true}, "return 1 == 1 or 3 == 2;");
+    try testReturnValue(.{.bool = true}, "return 1 == 3 or 3 == 3;");
+    try testReturnValue(.{.bool = false}, "return 1 == 3 and (3 == 4 or 4 == 4);");
 }
 
 test "elz: while" {
-    try t.expectEqual(10, testSimple(
+    try testReturnValue(.{.i64 = 10},
         \\ var i = 0;
         \\ while (i < 10) {
         \\   i++;
         \\ }
         \\ return i;
-    ).i64);
+    );
 
-    try t.expectEqual(0, testSimple(
+    try testReturnValue(.{.i64 = 0},
         \\ var i = 0;
         \\ while (false) {
         \\   i = i + 1;
         \\ }
         \\ return i;
-    ).i64);
+    );
 }
 
 test "elz: for" {
-    try t.expectEqual(10, testSimple(
+    try testReturnValue(.{.i64 = 10},
         \\ var i = 0;
         \\ for (var x = 0; x < 10; x = x + 1) {
         \\   i = i + 1;
         \\ }
         \\ return i;
-    ).i64);
+    );
 
-    try t.expectEqual(2, testSimple(
+    try testReturnValue(.{.i64 = 2},
         \\ var i = 10;
         \\ for (var x = 10; x > 2; x = x - 1) {
         \\   i = i - 1;
         \\ }
         \\ return i;
-    ).i64);
+    );
 
     // test various incerment/decrement while we're here (++ and --)
-    try t.expectEqual(10, testSimple(
+    try testReturnValue(.{.i64 = 10},
         \\ var i = 0;
         \\ for (var x = 0; x < 10; x++) {
         \\   i++;
         \\ }
         \\ return i;
-    ).i64);
+    );
 
-    try t.expectEqual(2, testSimple(
+    try testReturnValue(.{.i64 = 2},
         \\ var i = 10;
         \\ for (var x = 10; x > 2; x--) {
         \\   i--;
         \\ }
         \\ return i;
-    ).i64);
+    );
 
     // test various incerment/decrement while we're here (+= and -=)
-    try t.expectEqual(8, testSimple(
+    try testReturnValue(.{.i64 = 8},
         \\ var i = 0;
         \\ for (var x = 0; x < 10; x += 3) {
         \\   i += 2;
         \\ }
         \\ return i;
-    ).i64);
+    );
 
-    try t.expectEqual(4, testSimple(
+    try testReturnValue(.{.i64 = 4},
         \\ var i = 10;
         \\ for (var x = 10; x > 2; x -= 3) {
         \\   i -= 2;
         \\ }
         \\ return i;
-    ).i64);
+    );
 }
 
 test "elz: empty scope"  {
-    _ = testSimple("{}"); // doesn't crash, yay!
+    try testReturnValue(.{.null = {}}, "{} return null;"); // doesn't crash, yay!
 }
 
-fn testSimple(src: []const u8) Value {
-    var c = Compiler(Preset.small).init(t.allocator) catch unreachable;
-    defer c.deinit();
-
-    c.compile(src) catch {
-        std.debug.print("Compilation error: {}\n", .{c.err.?});
-        unreachable;
+fn testReturnValue(expected: Value, src: []const u8) !void {
+    const configs = [_]Config{
+        Preset.small,
+        .{.max_locals = 300}, // requires u16
     };
 
-    const byte_code = c.byteCode(t.allocator) catch unreachable;
-    defer t.allocator.free(byte_code);
-    // disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
+    inline for (configs) |config| {
+        var c = try Compiler(config).init(t.allocator);
+        defer c.deinit();
 
-    var vm = VM.init(t.allocator);
-    defer vm.deinit();
+        c.compile(src) catch |err| {
+            std.debug.print("Compilation error: {}\n", .{c.err.?});
+            return err;
+        };
 
-    const value = vm.run(byte_code) catch |err| {
-        std.debug.print("{any}", .{err});
-        if (vm.err) |e| {
-            std.debug.print("{any} {s}\n", .{ e.err, e.desc });
+        const byte_code = try c.byteCode(t.allocator);
+        defer t.allocator.free(byte_code);
+        errdefer disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
+
+        var vm = VM(config).init(t.allocator);
+        defer vm.deinit();
+
+        const value = vm.run(byte_code) catch |err| {
+            std.debug.print("{any}", .{err});
+            if (vm.err) |e| {
+                std.debug.print("{any} {s}\n", .{ e.err, e.desc });
+            }
+            disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
+            return err;
+        };
+
+        try t.expectString(@tagName(expected), @tagName(value));
+
+        switch (value) {
+            .string => |str| try t.expectString(expected.string, str),
+            else => try t.expectEqual(expected, value),
         }
-        disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
-        unreachable;
-    };
-
-    // Values are tied to the VM, which this function will deinit
-    // We need to dupe our strnig into our testing arena.
-    return switch (value) {
-        .string => |str| .{ .string = t.arena.allocator().dupe(u8, str) catch unreachable },
-        else => value,
-    };
+    }
 }
 
 fn testError(expected: []const u8, src: []const u8) !void {
