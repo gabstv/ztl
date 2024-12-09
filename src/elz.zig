@@ -25,7 +25,6 @@ pub const Preset = struct {
 const t = @import("t.zig");
 
 test "elz: local limit" {
-
     blk: {
         var c = Compiler(.{.max_locals = 3}).init(t.allocator) catch unreachable;
         defer c.deinit();
@@ -282,6 +281,8 @@ test "elz: variables" {
         \\ return name;
     );
 
+    try testReturnValue(.{.string = "LONG"}, "var " ++ "l" ** 127 ++ " = `LONG`; return " ++ "l" ** 127 ++ ";");
+
     try testReturnValue(.{.string = "Leto"},
         \\ var name = `Leto`;
         \\ {
@@ -320,6 +321,8 @@ test "elz: variables" {
         \\ var c = 3;
         \\ var c = 3;
     );
+
+    try testError("Identifier \"" ++ "a" ** 128 ++ "\" exceeds the character limit of 127", "var " ++ "a" ** 128 ++ " = null;");
 }
 
 test "elz: if" {
@@ -546,6 +549,8 @@ test "elz: functions" {
         \\    return a;
         \\ }
     );
+
+    try testError("Identifier \"" ++ "x" ** 128 ++ "\" exceeds the character limit of 127", "fn " ++ "x" ** 128 ++ "(){}");
 }
 
 fn testReturnValue(expected: Value, src: []const u8) !void {

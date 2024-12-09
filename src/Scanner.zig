@@ -161,7 +161,7 @@ pub const Scanner = struct {
                     self.line_start = pos;
                 },
                 'a'...'z', 'A'...'Z', '_' => {
-                    if (self.identifier(&pos)) |token| {
+                    if (try self.identifier(&pos)) |token| {
                         return token;
                     }
                     // else an error was recorded, keep parsing
@@ -309,7 +309,7 @@ pub const Scanner = struct {
     }
 
     // scanner_pos points to the first byte after whatever byte triggered this
-    fn identifier(self: *Scanner, scanner_pos: *u32) ?Token {
+    fn identifier(self: *Scanner, scanner_pos: *u32) !?Token {
         var pos = scanner_pos.*;
 
         const start = pos - 1;
@@ -355,6 +355,12 @@ pub const Scanner = struct {
                 else => {},
             },
             else => {},
+        }
+
+        if (value.len > 127) {
+            // would be better in the compiler, but so much easier to do here.
+            try self.setErrorFmt("Identifier \"{s}\" exceeds the character limit of 127", .{value});
+            return error.ScanError;
         }
 
         return .{
