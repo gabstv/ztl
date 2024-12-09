@@ -1,7 +1,19 @@
 pub const Config = struct {
+    debug: DebugMode = .none,
     max_locals: u16 = 256,
+    max_call_frames: u8 = 255,
     initial_code_size: u32 = 512,
     initial_data_size: u32 = 512,
+
+    const DebugMode = enum {
+        none,
+        minimal,
+        full,
+    };
+
+    pub fn shouldDebug(comptime self: Config, level: DebugMode) bool {
+        return @intFromEnum(self.debug) >= @intFromEnum(level);
+    }
 
     pub fn LocalType(comptime self: Config) type {
         const ml = self.max_locals;

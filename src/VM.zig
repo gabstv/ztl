@@ -6,15 +6,15 @@ const OpCode = @import("byte_code.zig").OpCode;
 
 const Allocator = std.mem.Allocator;
 
+const Stack = std.ArrayListUnmanaged(Value);
+
 pub fn VM(comptime config: Config) type {
     return struct {
-        _allocator: Allocator,
+        _arena: std.heap.ArenaAllocator,
 
-        _stack: [10]Value = undefined,
-        _stack_pointer: [*]Value = undefined,
+        _stack: Stack = .{},
 
-        // whether we own err.?.desc or not
-        _own_error: bool = false,
+        _frames: [config.max_call_frames]Frame(config) = undefined,
 
         // execution error
         err: ?Error = null,
@@ -26,30 +26,39 @@ pub fn VM(comptime config: Config) type {
 
         pub fn init(allocator: Allocator) Self {
             return .{
-                ._allocator = allocator,
+                ._arena = std.heap.ArenaAllocator.init(allocator),
             };
         }
 
         pub fn deinit(self: Self) void {
-            if (self._own_error) {
-                self._allocator.free(self.err.?.desc);
-            }
+            self._arena.deinit();
         }
 
         pub fn run(self: *Self, byte_code: []const u8) !Value {
-
-            self._stack_pointer = &self._stack;
-
             var ip = byte_code.ptr;
-            const code_length = @as(u32, @bitCast(ip[0..4].*));
-            ip += 4;
+            const code_end = 8 + @as(u32, @bitCast(ip[0..4].*));
 
-            if (code_length == 0) {
+            if (code_end == 8) {
                 return .{.null = {}};
             }
 
-            const start = ip;
-            const data = ip[code_length..];
+            const code = byte_code[8..code_end];
+            const data = byte_code[code_end..];
+
+            // goto to the main script
+            ip += 8 + @as(u32, @bitCast(ip[4..8].*));
+
+            const allocator = self._arena.allocator();
+
+            var frames = &self._frames;
+            frames[0] = .{
+                .ip = ip,
+                .frame_pointer = 0,
+            };
+            var frame_count: usize = 0;
+
+            var stack = &self._stack;
+            var frame_pointer: usize = 0;
 
             while (true) {
                 const op_code: OpCode = @enumFromInt(ip[0]);
@@ -57,16 +66,16 @@ pub fn VM(comptime config: Config) type {
                 switch (op_code) {
                     .CONSTANT_I64 => {
                         const value = @as(i64, @bitCast(ip[0..8].*));
-                        self.push(.{ .i64 = value });
+                        try stack.append(allocator, .{ .i64 = value });
                         ip += 8;
                     },
                     .CONSTANT_F64 => {
                         const value = @as(f64, @bitCast(ip[0..8].*));
-                        self.push(.{ .f64 = value });
+                        try stack.append(allocator, .{ .f64 = value });
                         ip += 8;
                     },
                     .CONSTANT_BOOL => {
-                        self.push(.{ .bool = ip[0] == 1 });
+                        try stack.append(allocator, .{ .bool = ip[0] == 1 });
                         ip += 1;
                     },
                     .CONSTANT_STRING => {
@@ -75,49 +84,63 @@ pub fn VM(comptime config: Config) type {
 
                         const string_start = data_start + 4;
                         const string_end = @as(u32, @bitCast(data[data_start..string_start][0..4].*));
-                        self.push(.{ .string = data[string_start..string_end] });
+                        try stack.append(allocator, .{ .string = data[string_start..string_end] });
                     },
-                    .CONSTANT_NULL => self.push(.{ .null = {} }),
+                    .CONSTANT_NULL => try stack.append(allocator, .{ .null = {} }),
                     .GET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
+                        try stack.append(allocator, stack.items[frame_pointer + idx]);
                         ip += SL;
-                        self.push(self._stack[idx]);
                     },
                     .SET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
+                        stack.items[frame_pointer + idx] = stack.getLast();
                         ip += SL;
-                        self._stack[idx] = self.peek();
                     },
-                    .ADD => try self.arithmetic(&add),
-                    .SUBTRACT => try self.arithmetic(&subtract),
-                    .MULTIPLY => try self.arithmetic(&multiply),
-                    .DIVIDE => try self.arithmetic(&divide),
+                    .ADD => try self.arithmetic(stack, &add),
+                    .SUBTRACT => try self.arithmetic(stack, &subtract),
+                    .MULTIPLY => try self.arithmetic(stack, &multiply),
+                    .DIVIDE => try self.arithmetic(stack, &divide),
+                    .MODULUS => try self.arithmetic(stack, &modulus),
                     .NEGATE => {
-                        const v = self.values();
-                        switch (v[0]) {
-                            .i64 => |n| v[0].i64 = -n,
-                            .f64 => |n| v[0].f64 = -n,
-                            else => return self.setErrorFmt(error.TypeError, "Cannot negate non-numeric value: -{s}", .{v[0]}),
+                        var v = &stack.items[stack.items.len - 1];
+                        switch (v.*) {
+                            .i64 => |n| v.i64 = -n,
+                            .f64 => |n| v.f64 = -n,
+                            else => return self.setErrorFmt(error.TypeError, "Cannot negate non-numeric value: -{s}", .{v.*}),
                         }
                     },
                     .NOT => {
-                        const v = self.values();
-                        switch (v[0]) {
-                            .bool => |b| v[0].bool = !b,
-                            else => return self.setErrorFmt(error.TypeError, "Cannot not non-booleaning value: !{s}", .{v[0]}),
+                        var v = &stack.items[stack.items.len - 1];
+                        switch (v.*) {
+                            .bool => |b| v.bool = !b,
+                            else => return self.setErrorFmt(error.TypeError, "Cannot inverse non-boolean value: !{s}", .{v.*}),
                         }
                     },
-                    .EQUAL => try self.comparison(&equal),
-                    .GREATER => try self.comparison(&greater),
-                    .LESSER => try self.comparison(&lesser),
-                    .JUMP => ip = start + @as(u16, @bitCast(ip[0..2].*)),
+                    .EQUAL => try self.comparison(stack, &equal),
+                    .GREATER => try self.comparison(stack, &greater),
+                    .LESSER => try self.comparison(stack, &lesser),
+                    .JUMP => {
+                        // really??
+                        const relative: i16 = @bitCast(ip[0..2].*);
+                        if (relative >= 0) {
+                            ip += @intCast(relative);
+                        } else {
+                            ip = ip - @abs(relative);
+                        }
+                    },
                     .JUMP_IF_FALSE => {
-                        if (self.peek().isTrue()) {
+                        if (stack.items[stack.items.len - 1].isTrue()) {
                             // just skip the jump address
                             ip += 2;
                         } else {
-                            // skip the jump address + the nested code
-                            ip = start + @as(u16, @bitCast(ip[0..2].*));
+                            // really??
+                           const relative: i16 = @bitCast(ip[0..2].*);
+                            if (relative >= 0) {
+                                ip += @intCast(relative);
+                            } else {
+                                ip = ip - @abs(relative);
+                            }
                         }
                     },
                     .INCR => {
@@ -127,41 +150,72 @@ pub fn VM(comptime config: Config) type {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
                         ip += SL;
 
-                        const v = try self.add(self._stack[idx], .{.i64 = incr});
-                        self.push(v);
-                        self._stack[idx] = v;
+                        const adjusted_idx = frame_pointer + idx;
+                        const v = try self.add(stack.items[adjusted_idx], .{.i64 = incr});
+                        try stack.append(allocator, v);
+                        stack.items[adjusted_idx] = v;
                     },
-                    .PRINT => std.debug.print("{}\n", .{self.pop()}),
-                    .POP => _ = self.pop(),
-                    .RETURN => return self.pop(),
+                    .CALL => {
+                        const data_start = @as(u32, @bitCast(ip[0..4].*));
+                        ip += 4;
+
+                        const meta = data[data_start..data_start + 5];
+
+                        const arity = meta[0];
+                        const code_pos = @as(u32, @bitCast(meta[1..5][0..4].*));
+
+                        // Capture the state of our current frame. This is what
+                        // we'll return to.
+                        frames[frame_count].ip = ip;
+
+                        // jump to the function code
+                        ip = code[code_pos..].ptr;
+
+                        // adjust our frame pointer
+                        frame_pointer = stack.items.len - arity;
+
+                        // Push a new frame. This is the functiont that we're
+                        // going to be executing.
+                        frame_count += 1;
+                        frames[frame_count] = .{
+                            .ip = ip,
+                            .frame_pointer = frame_pointer,
+                        };
+                    },
+                    .PRINT => std.debug.print("{}\n", .{stack.pop()}),
+                    .POP => _ = stack.pop(),
+                    .RETURN => {
+                        const value = stack.pop();
+                        if (frame_count == 0) {
+                            return value;
+                        }
+                        stack.items.len = frames[frame_count].frame_pointer;
+
+                        frame_count -= 1;
+                        const frame = frames[frame_count];
+                        ip = frame.ip;
+                        frame_pointer = frame.frame_pointer;
+                        try stack.append(allocator, value);
+                    },
+                    .DEBUG => {
+                        // debug information always contains a 2 byte length
+                        // prefix (including the lenght prefix itself) to make
+                        // it quick for the VM to skip.
+                        ip += @as(u16, @bitCast(ip[0..2].*));
+                    }
                 }
             }
         }
 
-        fn push(self: *Self, literal: Value) void {
-            self._stack_pointer[0] = literal;
-            self._stack_pointer += 1;
-        }
 
-        fn pop(self: *Self) Value {
-            self._stack_pointer -= 1;
-            return self._stack_pointer[0];
-        }
+        fn arithmetic(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) anyerror!Value) !void {
+            var values = stack.items;
+            const right_index = values.len - 1;
+            std.debug.assert(right_index >= 1);
 
-        fn peek(self: *Self) Value {
-            return (self._stack_pointer - 1)[0];
-        }
-
-        fn arithmetic(self: *Self, operation: *const fn (self: *Self, left: Value, right: Value) anyerror!Value) !void {
-            // This is a pop(), pop() which brings sp -= 2;
-            // Followed by a push() with brings sp += 1;
-            // The final result being sp -= 1;
-            // We can jump immediately to sp - 1, and grab sp[-1] (left) and sp[0] (right)
-            // which puts our result in sp[0].
-            self._stack_pointer -= 1;
-            const ptr = self.values();
-            const result = try operation(self, ptr[0], ptr[1]);
-            ptr[0] = result;
+            const left_index = right_index - 1;
+            values[left_index] = try operation(self, values[left_index], values[right_index]);
+            stack.items.len = right_index;
         }
 
         fn add(self: *Self, left: Value, right: Value) anyerror!Value {
@@ -232,17 +286,26 @@ pub fn VM(comptime config: Config) type {
             return self.setErrorFmt(error.TypeError, "Cannot divide non-numeric value: {s} - {s}", .{ left, right });
         }
 
-        fn comparison(self: *Self, operation: *const fn (self: *Self, left: Value, right: Value) anyerror!bool) !void {
-            // This is a pop(), pop() which brings sp -= 2;
-            // Followed by a push() with brings sp += 1;
-            // The final result being sp -= 1;
-            // We can jump immediately to sp - 1, and grab sp[-1] (left) and sp[0] (right)
-            // which puts our result in sp[0].
-            // (Zig doesn't yet support negative indexes, so we use this ptrFromInt stuff)
-            self._stack_pointer -= 1;
-            const ptr = self.values();
-            const result = try operation(self, ptr[0], ptr[1]);
-            ptr[0] = .{ .bool = result };
+        fn modulus(self: *Self, left: Value, right: Value) anyerror!Value {
+            switch (left) {
+                .i64 => |l| switch (right) {
+                    .i64 => |r| return .{ .i64 = @mod(l, r) },
+                    else => {},
+                },
+                else => {},
+            }
+            return self.setErrorFmt(error.TypeError, "Cannot take remainder of non-integer value: {s} - {s}", .{ left, right });
+        }
+
+        fn comparison(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) anyerror!bool) !void {
+            var values = stack.items;
+            const right_index = values.len - 1;
+            std.debug.assert(right_index >= 1);
+
+            const left_index = right_index - 1;
+            const result = try operation(self, values[left_index], values[right_index]);
+            values[left_index] = .{.bool = result};
+            stack.items.len = right_index;
         }
 
         fn equal(self: *Self, left: Value, right: Value) anyerror!bool {
@@ -316,16 +379,15 @@ pub fn VM(comptime config: Config) type {
             return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, @tagName(left), @tagName(right) });
         }
 
-        inline fn values(self: *const Self) [*]Value {
-            return @ptrFromInt(@intFromPtr(self._stack_pointer) - @sizeOf(Value));
-        }
+        // inline fn values(self: *const Self) [*]Value {
+        //     return @ptrFromInt(@intFromPtr(self._frame_pointer) - @sizeOf(Value));
+        // }
 
         fn setErrorFmt(self: *Self, err: anyerror, comptime fmt: []const u8, args: anytype) anyerror {
             self.err = .{
                 .err = err,
-                .desc = try std.fmt.allocPrint(self._allocator, fmt, args),
+                .desc = try std.fmt.allocPrint(self._arena.allocator(), fmt, args),
             };
-            self._own_error = true;
             return err;
         }
 
@@ -334,9 +396,17 @@ pub fn VM(comptime config: Config) type {
                 .err = err,
                 .desc = desc,
             };
-            self._own_error = false;
             return err;
         }
+    };
+}
+
+fn Frame(comptime config: Config) type {
+    _ = config;
+
+    return struct {
+        ip: [*]const u8,
+        frame_pointer: usize = undefined,
     };
 }
 

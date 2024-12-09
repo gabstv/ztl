@@ -8,6 +8,14 @@ pub const disassemble = @import("byte_code.zig").disassemble;
 
 pub const Preset = struct {
     pub const small = Config{
+        .debug = .none,
+        .max_locals = 256,
+        .initial_code_size = 256,
+        .initial_data_size = 256,
+    };
+
+    pub const debugSmall = Config{
+        .debug = .minimal,
         .max_locals = 256,
         .initial_code_size = 256,
         .initial_data_size = 256,
@@ -17,10 +25,10 @@ pub const Preset = struct {
 const t = @import("t.zig");
 
 test "elz: local limit" {
-    var c = Compiler(.{.max_locals = 3}).init(t.allocator) catch unreachable;
-    defer c.deinit();
 
     blk: {
+        var c = Compiler(.{.max_locals = 3}).init(t.allocator) catch unreachable;
+        defer c.deinit();
         c.compile(
             \\ var a = 1;
             \\ var b = 1;
@@ -34,7 +42,8 @@ test "elz: local limit" {
     }
 
     {
-        c.reset(4096);
+        var c = Compiler(.{.max_locals = 3}).init(t.allocator) catch unreachable;
+        defer c.deinit();
         try c.compile(
             \\ var a = 1;
             \\ var b = 1;
@@ -281,6 +290,15 @@ test "elz: variables" {
         \\ return name;
     );
 
+    try testReturnValue(.{.string = "other"},
+        \\ var name = `Leto`;
+        \\ {
+        \\    var x = "Ghanima" ;
+        \\ }
+        \\ var x = "other";
+        \\ return x;
+    );
+
     try testReturnValue(.{.string = "Ghanima"},
         \\ var name = `Leto`;
         \\ {
@@ -446,12 +464,93 @@ test "elz: for" {
     );
 }
 
-test "elz: empty scope"  {
+test "elz: empty scope" {
     try testReturnValue(.{.null = {}}, "{} return null;"); // doesn't crash, yay!
+}
+
+test "elz: functions" {
+    try testReturnValue(.{.i64 = 25},
+        \\ return value(3);
+        \\
+        \\ fn value(start) {
+        \\   return start + 22;
+        \\ }
+    );
+
+    // implicit return
+    try testReturnValue(.{.null = {}},
+        \\ return value();
+        \\
+        \\ fn value() {
+        \\ }
+    );
+
+    try testReturnValue(.{.i64 = 26},
+        \\ var start = 4;
+        \\ var noise = 99;
+        \\ return value(start);
+        \\
+        \\ fn value(start) {
+        \\   var noise = 100;
+        \\   return start + 22;
+        \\ }
+    );
+
+    try testReturnValue(.{.i64 = 4},
+        \\ var x = 4;
+        \\ var y = 6;
+        \\ return sum(x, y);
+        \\
+        \\ fn sum(a, b) {
+        \\    if (b == 0) {
+        \\       return 5;
+        \\    }
+        \\    return a;
+        \\ }
+    );
+
+    try testReturnValue(.{.i64 = 10},
+        \\ fn first() {
+        \\   var a = 1;
+        \\   var c = second();
+        \\   var d = 2;
+        \\   return a + c + d;
+        \\ }
+        \\
+        \\ fn second() {
+        \\   var y = 3;
+        \\   var z = 4;
+        \\   return y + z;
+        \\ }
+        \\
+        \\ return first();
+    );
+
+    try testReturnValue(.{.i64 = 134},
+        \\ fn sum(a, b, count) {
+        \\    if (count == 0) {
+        \\       return magic(a) + b;
+        \\    }
+        \\    return sum(a + b, b, count - 1);
+        \\ }
+        \\
+        \\ var x = 4;
+        \\ var y = 6;
+        \\ return sum(x, y, 10);
+        \\
+        \\
+        \\ fn magic(a) {
+        \\    if (a % 2 == 0) {
+        \\      return a * 2;
+        \\    }
+        \\    return a;
+        \\ }
+    );
 }
 
 fn testReturnValue(expected: Value, src: []const u8) !void {
     const configs = [_]Config{
+        .{.debug = .full},
         Preset.small,
         .{.max_locals = 300}, // requires u16
     };
@@ -467,7 +566,7 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
 
         const byte_code = try c.byteCode(t.allocator);
         defer t.allocator.free(byte_code);
-        // disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
+        // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
         var vm = VM(config).init(t.allocator);
         defer vm.deinit();
@@ -477,7 +576,7 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
             if (vm.err) |e| {
                 std.debug.print("{any} {s}\n", .{ e.err, e.desc });
             }
-            disassemble(.{}, byte_code, std.io.getStdErr().writer()) catch unreachable;
+            disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
             return err;
         };
 

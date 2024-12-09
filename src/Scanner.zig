@@ -71,6 +71,7 @@ pub const Scanner = struct {
                 ')' => return self.createSimpleToken("RIGHT_PARENTHESIS", ")"),
                 ',' => return self.createSimpleToken("COMMA", ","),
                 '.' => return self.createSimpleToken("DOT", "."),
+                '%' => return self.createSimpleToken("PERCENT", "%"),
                 '+' => {
                     if (self.at(pos) == '+') {
                         pos += 1;
@@ -426,6 +427,7 @@ pub const Token = struct {
         MINUS_MINUS,
         NULL,
         OR,
+        PERCENT,
         PLUS,
         PLUS_EQUAL,
         PLUS_PLUS,
@@ -473,6 +475,7 @@ pub const Token = struct {
         MINUS_MINUS,
         NULL,
         OR,
+        PERCENT,
         PLUS,
         PLUS_EQUAL,
         PLUS_PLUS,

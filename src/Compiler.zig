@@ -33,8 +33,11 @@ pub fn Compiler(comptime config: Config) type {
         _current_token: Token,
         _previous_token: Token,
 
-        // used to track local variables
-        _scope_depth: usize = 0,
+        _functions: std.StringHashMapUnmanaged(Function),
+
+        // Used to track the scope that we're in
+        // Also assigned to a local to determine in what scope the local can be used
+        _scopes: std.ArrayListUnmanaged(Scope),
         _locals: std.ArrayListUnmanaged(Local),
 
         const Self = @This();
@@ -50,7 +53,9 @@ pub fn Compiler(comptime config: Config) type {
 
             return .{
                 ._arena = aa,
+                ._scopes = .{},
                 ._locals = .{},
+                ._functions = .{},
                 ._byte_code = try ByteCode(config).init(aa),
                 ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
                 ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
@@ -63,26 +68,20 @@ pub fn Compiler(comptime config: Config) type {
             arena.child_allocator.destroy(arena);
         }
 
-        pub fn reset(self: *Self, retain_limit: usize) void {
-            self._locals.capacity = 0;
-            self._locals.items.len = 0;
-            self._byte_code.reset();
-            const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(self._arena.ptr));
-            _ = arena.reset(.{.retain_with_limit = retain_limit});
-        }
-
-        pub fn byteCode(self: *const Self, allocator: Allocator) ![]const u8 {
-            return self._byte_code.toBytes(allocator);
-        }
-
         pub fn compile(self: *Self, src: []const u8) CompileError!void {
             self._scanner = Scanner.init(self._arena, src);
 
             try self.advance();
 
+            self._byte_code.beginScript();
+            try self.beginScope(false);
             while (try self.match(.EOF) == false) {
                 try self.declaration();
             }
+        }
+
+        pub fn byteCode(self: *const Self, allocator: Allocator) CompileError![]const u8 {
+            return self._byte_code.toBytes(allocator);
         }
 
         fn advance(self: *Self) !void {
@@ -121,6 +120,68 @@ pub fn Compiler(comptime config: Config) type {
                     try self.advance();
                     return self.variableDeclaration();
                 },
+                .FN => {
+                    try self.advance();
+                    const bc = &self._byte_code;
+
+                    try self.consume(.IDENTIFIER, "function name");
+                    const name = self._previous_token.value.IDENTIFIER;
+                    try self.consume(.LEFT_PARENTHESIS, "'(' after function name'");
+
+                    try self.beginScope(false);
+                    var arity: u16 = 0;
+                    if (try self.match(.RIGHT_PARENTHESIS) == false) {
+                        // parse argument list
+                        const scope_depth = self.scopeDepth();
+                        var locals = &self._locals;
+                        while (true) {
+                            arity += 1;
+                            if (arity > 255) {
+                                try self.setErrorFmt("Function '{s}' has more than 255 parameters", .{name}, null);
+                                return error.CompileError;
+                            }
+
+                            try self.consume(.IDENTIFIER, "variable name");
+
+                            // Function parameters are just locals to the function
+                            // The way the VM loads them means that they'll be
+                            // "initialized" in the caller.
+                            const variable_name = self._previous_token.value.IDENTIFIER;
+                            try locals.append(self._arena, .{
+                                .depth = scope_depth,
+                                .name = variable_name,
+                            });
+
+                            if (try self.match(.RIGHT_PARENTHESIS)) {
+                                break;
+                            }
+                            try self.consume(.COMMA, "parameter separator (',')");
+                        }
+                    }
+
+                    try self.consume(.LEFT_BRACE, "'{{' before function body");
+
+                    var gop = try self._functions.getOrPut(self._arena, name);
+                    if (gop.found_existing) {
+                        if (gop.value_ptr.code_pos != null) {
+                            try self.setErrorFmt("Function '{s}' already declared", .{name}, null);
+                            return error.CompileError;
+                        }
+                    } else {
+                        gop.value_ptr.* = try self.newFunction(name);
+                    }
+
+                    try bc.beginFunction(name);
+                    try self.block();
+                    if (self.currentScope().has_return == false) {
+                        try bc.@"null"();
+                        try bc.op(.RETURN);
+                    }
+                    try self.endScope(true);
+
+                    gop.value_ptr.arity = @intCast(arity);
+                    gop.value_ptr.code_pos = try bc.endFunction(gop.value_ptr.data_pos, @intCast(arity));
+                },
                 else => return self.statement(),
             }
         }
@@ -137,9 +198,10 @@ pub fn Compiler(comptime config: Config) type {
             }
 
             const name = self._previous_token.value.IDENTIFIER;
+            const scope_depth = self.scopeDepth();
 
             if (self.localVariableIndex(name)) |idx| {
-                if (locals.items[idx].depth == self._scope_depth) {
+                if (locals.items[idx].depth == scope_depth) {
                     try self.setErrorFmt("Variable '{s}' already declared", .{name}, null);
                     return error.CompileError;
                 }
@@ -155,7 +217,7 @@ pub fn Compiler(comptime config: Config) type {
             try self.consumeSemicolon();
 
             // prevents things like: var count = count + 1;
-            locals.items[locals.items.len - 1].depth = self._scope_depth;
+            locals.items[locals.items.len - 1].depth = scope_depth;
         }
 
         fn statement(self: *Self) CompileError!void {
@@ -163,27 +225,9 @@ pub fn Compiler(comptime config: Config) type {
             switch (self._current_token.value) {
                 .LEFT_BRACE => {
                     try self.advance();
-                    const scope = self._scope_depth;
-                    self._scope_depth = scope + 1;
+                    try self.beginScope(true);
                     try self.block();
-                    self._scope_depth = scope;
-
-                    // pop off any locals from this scope
-                    const locals = &self._locals;
-                    const count = locals.items.len;
-                    if (count > 0) {
-                        var i = count - 1;
-                        while (i >= 0) : (i -= 1) {
-                            if (locals.items[i].depth.? > scope) {
-                                try bc.op(.POP);
-                            } else {
-                                locals.items.len = i + 1;
-                                break;
-                            }
-                        } else {
-                            locals.clearRetainingCapacity();
-                        }
-                    }
+                    try self.endScope(false);
                 },
                 .IF => {
                     try self.advance();
@@ -203,8 +247,8 @@ pub fn Compiler(comptime config: Config) type {
                         try self.statement();
                         try self.finalizeJump(else_jump);
                     } else {
-                        try bc.op(.POP); // pop the if condition (when false with no else
                         try self.finalizeJump(if_jump);
+                        try bc.op(.POP); // pop the if condition (when if is false with no else)
                     }
                 },
                 .FOR => {
@@ -212,8 +256,8 @@ pub fn Compiler(comptime config: Config) type {
                     try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
 
                     // initializer variable needs its own scope
-                    const scope = self._scope_depth;
-                    self._scope_depth = scope + 1;
+
+                    try self.beginScope(true);
 
                     if (try self.match(.VAR)) {
                         try self.variableDeclaration();
@@ -226,7 +270,7 @@ pub fn Compiler(comptime config: Config) type {
                     // this is where we jump back to after every loop
                     const loop_start = bc.currentPos();
 
-                    var jump_loop: ?usize = null;
+                    var jump_loop: ?u32 = null;
                     if (try self.match(.SEMICOLON) == false) {
                         // we have a condition!
                         try self.expression();
@@ -259,8 +303,7 @@ pub fn Compiler(comptime config: Config) type {
                         try bc.op(.POP);
                     }
 
-                    // restore our scope
-                    self._scope_depth = scope;
+                    try self.endScope(false);
 
                 },
                 .WHILE => {
@@ -280,12 +323,6 @@ pub fn Compiler(comptime config: Config) type {
                     // pop the result of the condition when it's [finally] false
                     try bc.op(.POP);
                 },
-                .PRINT => {
-                    try self.advance();
-                    try self.expression();
-                    try self.consumeSemicolon();
-                    try bc.op(.PRINT);
-                },
                 .RETURN => {
                     try self.advance();
                     if (try self.match(.SEMICOLON)) {
@@ -295,6 +332,13 @@ pub fn Compiler(comptime config: Config) type {
                         try self.consumeSemicolon();
                         try bc.op(.RETURN);
                     }
+                    self.currentScope().has_return = true;
+                },
+                .PRINT => {
+                    try self.advance();
+                    try self.expression();
+                    try self.consumeSemicolon();
+                    try bc.op(.PRINT);
                 },
                 else => {
                     try self.expression();
@@ -304,14 +348,14 @@ pub fn Compiler(comptime config: Config) type {
             }
         }
 
-        fn jump(self: *Self, pos: usize) !void  {
+        fn jump(self: *Self, pos: u32) !void  {
             self._byte_code.jump(pos) catch {
                 self.setError("Jump size exceeded maximum allowed value", null);
                 return error.CompileError;
             };
         }
 
-        fn finalizeJump(self: *Self, pos: usize) !void  {
+        fn finalizeJump(self: *Self, pos: u32) !void  {
             self._byte_code.finalizeJump(pos) catch {
                 self.setError("Jump size exceeded maximum allowed value", null);
                 return error.CompileError;
@@ -376,6 +420,7 @@ pub fn Compiler(comptime config: Config) type {
                 .GREATER_EQUAL => try self._byte_code.op2(.LESSER, .NOT),
                 .LESSER => try self._byte_code.op(.LESSER),
                 .LESSER_EQUAL => try self._byte_code.op2(.GREATER, .NOT),
+                .PERCENT => try self._byte_code.op(.MODULUS),
                 else => unreachable,
             }
         }
@@ -409,6 +454,13 @@ pub fn Compiler(comptime config: Config) type {
 
         fn @"null"(self: *Self, _: bool) CompileError!void {
             return self._byte_code.null();
+        }
+
+        fn identifier(self: *Self, can_assign: bool) CompileError!void {
+            if (self._current_token.value == .LEFT_PARENTHESIS) {
+                return self.call();
+            }
+            return self.variable(can_assign);
         }
 
         fn variable(self: *Self, can_assign: bool) CompileError!void {
@@ -484,6 +536,42 @@ pub fn Compiler(comptime config: Config) type {
             }
         }
 
+        fn call(self: *Self) CompileError!void {
+            const name = self._previous_token.value.IDENTIFIER;
+
+            try self.advance(); // consume '(
+
+            var arity: u16 = 0;
+            if (try self.match(.RIGHT_PARENTHESIS) == false) {
+                while (true) {
+                    if (try self.match(.RIGHT_PARENTHESIS)) {
+                    }
+                    arity += 1;
+                    try self.expression();
+                    if (try self.match(.RIGHT_PARENTHESIS)) {
+                        break;
+                    }
+                    try self.consume(.COMMA, "parameter separator (',')");
+                }
+            }
+
+            // TODO: check arity (assuming we've declared the function)
+            const gop = try self._functions.getOrPut(self._arena, name);
+            if (gop.found_existing == false) {
+                gop.value_ptr.* = try self.newFunction(name);
+            }
+            try self._byte_code.call(gop.value_ptr.data_pos);
+        }
+
+        fn newFunction(self: *Self, name: []const u8) CompileError!Function {
+            const data_pos = try self._byte_code.newFunction(name);
+            return .{
+                .arity = null,
+                .code_pos = null,
+                .data_pos = data_pos,
+            };
+        }
+
         fn @"and"(self: *Self) CompileError!void {
             const bc = &self._byte_code;
 
@@ -514,20 +602,57 @@ pub fn Compiler(comptime config: Config) type {
 
         fn localVariableIndex(self: *const Self, name: []const u8) ?usize {
             const locals = self._locals.items;
-            if (locals.len == 0) {
-                return null;
-            }
-
+            const local_scope_start = self.currentScope().local_start;
             var idx = locals.len;
-            while (idx > 0) {
+            while (idx > local_scope_start) {
                 idx -= 1;
                 const local = locals[idx];
                 if (std.mem.eql(u8, name, local.name)) {
-                    return idx;
+                    return idx - local_scope_start;
                 }
             }
 
             return null;
+        }
+
+        fn scopeDepth(self: *const Self) usize {
+            return self._scopes.items.len;
+        }
+
+        fn currentScope(self: *const Self) *Scope {
+            return &self._scopes.items[self._scopes.items.len - 1];
+        }
+
+        fn beginScope(self: *Self, inherit_locals: bool) !void {
+            try self._scopes.append(self._arena , .{
+                .has_return = false,
+                .local_start = if (inherit_locals) self.currentScope().local_start else self._locals.items.len,
+            });
+        }
+
+        // Fast_pop is true when we're returning from a function.
+        // In this case, locals added by the functions don't need to be
+        // individually popped, the VM can simply restore the stack back to
+        // the caller's previous state.
+        fn endScope(self: *Self, comptime fast_pop: bool) !void {
+            _ = self._scopes.pop();
+            const scope_depth = self.scopeDepth();
+
+            // pop off any locals from this scope
+            var bc = &self._byte_code;
+            const locals = &self._locals;
+
+            var i = locals.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (locals.items[i].depth.? <= scope_depth) {
+                    break;
+                }
+                if (fast_pop == false) {
+                    try bc.op(.POP);
+                }
+                locals.items.len -= 1;
+            }
         }
 
         pub fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {
@@ -555,6 +680,26 @@ pub fn Compiler(comptime config: Config) type {
     };
 }
 
+// For top-level functions we store a small function header in the bytecode's
+// data section. This indirection allows the function to be called before its
+// declared by giving the function header a known location.
+// The first time we see a call to `sum()` we can reserve space in the data
+// section:
+//   0010 0 0 0 0 0
+// i.e:
+//   at address 0x10 of our data (arbitrary for this example), we reserve 5 bytes
+//   (function metadata is always 5 bytes).
+// And we can generate a Op.Call with operand 0x10
+//
+// Whe the function is actually declared, we can fill in those 5 bytes
+// The first is the arity, and the other 4 is the address of the actual function
+// code.
+const Function = struct {
+    arity: ?u8 = null,
+    data_pos: u32,
+    code_pos: ?u32 = null,
+};
+
 fn ParseRule(comptime C: type) type {
     return struct {
         infix: ?*const fn (*C) CompileError!void,
@@ -581,7 +726,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.FLOAT, null, C.number, Precedence.NONE },
             .{ Token.Type.GREATER, C.binary, null, Precedence.COMPARISON },
             .{ Token.Type.GREATER_EQUAL, C.binary, null, Precedence.COMPARISON },
-            .{ Token.Type.IDENTIFIER, null, C.variable, Precedence.NONE },
+            .{ Token.Type.IDENTIFIER, null, C.identifier, Precedence.NONE },
             .{ Token.Type.IF, null, null, Precedence.NONE },
             .{ Token.Type.INTEGER, null, C.number, Precedence.NONE },
             .{ Token.Type.LEFT_BRACE, null, null, Precedence.NONE },
@@ -591,6 +736,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.MINUS, C.binary, C.unary, Precedence.TERM },
             .{ Token.Type.NULL, null, C.null, Precedence.NONE },
             .{ Token.Type.OR, C.@"or", null, Precedence.OR },
+            .{ Token.Type.PERCENT, C.binary, null, Precedence.FACTOR },
             .{ Token.Type.PLUS, C.binary, null, Precedence.TERM },
             .{ Token.Type.RETURN, null, null, Precedence.NONE },
             .{ Token.Type.RIGHT_BRACE, null, null, Precedence.NONE },
@@ -640,7 +786,7 @@ const Precedence = enum {
     EQUALITY, // == !=
     COMPARISON, // < > <= >=
     TERM, // + -
-    FACTOR, // * /
+    FACTOR, // * / %
     UNARY, // ! -
     CALL, // . ()
     PRIMARY,
@@ -661,6 +807,11 @@ pub const Error = struct {
     pub fn format(self: Error, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         return writer.print("{s}", .{self.desc});
     }
+};
+
+const Scope = struct {
+    has_return: bool,
+    local_start: usize,
 };
 
 const Local = struct {

@@ -6,9 +6,22 @@ const Config = @import("config.zig").Config;
 pub fn ByteCode(comptime config: Config) type {
     return struct {
         allocator: Allocator,
+        // We have a single-pass compiler. But in very simple cases, we'll do
+        // something fancy that requires some lookahead. For example, the increment
+        // part of a for loop (i.e. for (initial; condition; increment)) will be
+        // read into "temp" and then glued to the end of the block.
         temp: Buffer(config.initial_code_size),
-        code: Buffer(config.initial_code_size),
+
         data: Buffer(config.initial_data_size),
+
+        frame_count: usize,
+        frames: [config.max_call_frames]Buffer(config.initial_code_size),
+
+        // will reference frames[frame_count]
+        frame: *Buffer(config.initial_code_size),
+
+        // the full code (basically, merging of all the frames)
+        code: Buffer(config.initial_code_size),
 
         const LocalIndex = config.LocalType();
         const SL = @sizeOf(LocalIndex);
@@ -18,28 +31,82 @@ pub fn ByteCode(comptime config: Config) type {
         pub fn init(allocator: Allocator) !Self {
             return .{
                 .temp = .{ },
-                .code = .{ },
                 .data = .{ },
+                .code = .{ },
+                .frame = undefined,
+                .frames = undefined,
+                .frame_count = 0,
                 .allocator = allocator,
             };
         }
 
-        pub fn reset(self: *Self) void {
-            self.temp = .{};
-            self.code = .{};
-            self.data = .{};
-        }
-
-        pub fn currentPos(self: *const Self) usize {
-            return self.code.pos;
+        pub fn currentPos(self: *const Self) u32 {
+            return self.frame.pos;
         }
 
         pub fn op(self: *Self, op_code: OpCode) !void {
-            return self.code.write(self.allocator, &.{@intFromEnum(op_code)});
+            return self.frame.write(self.allocator, &.{@intFromEnum(op_code)});
         }
 
         pub fn op2(self: *Self, op_code1: OpCode, op_code2: OpCode) !void {
-            return self.code.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
+            return self.frame.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
+        }
+
+        pub fn beginScript(self: *Self) void {
+            const frame_count = self.frame_count;
+            std.debug.assert(frame_count == 0);
+
+            self.frames[0] = .{};
+            self.frame = &self.frames[0];
+        }
+
+        pub fn beginFunction(self: *Self, name: []const u8) !void {
+            const fc = self.frame_count + 1;
+            self.frames[fc] = .{};
+            self.frame = &self.frames[fc];
+            self.frame_count = fc;
+
+            if (comptime config.shouldDebug(.full)) {
+                try self.debug(.FUNCTION_NAME, 1 + @as(u8, @intCast(name.len)));
+                try self.frame.write(self.allocator, &.{@intCast(name.len)});
+                try self.frame.write(self.allocator, name);
+            }
+        }
+
+        pub fn endFunction(self: *Self, data_pos: u32, arity: u8) !u32 {
+            // this is where the function code starts
+            const code_pos: u32 = @intCast(self.code.pos);
+
+            // copy our function code from the frame into the final code
+            try self.code.write(self.allocator, self.frame.buf[0..self.frame.pos]);
+
+            // fill in the frame's data header (the arity and the position in code)
+            self.data.buf[data_pos] = arity;
+            @memcpy(self.data.buf[data_pos + 1..data_pos + 5], std.mem.asBytes(&code_pos));
+
+            const frame_count = self.frame_count - 1;
+            self.frame_count = frame_count;
+            self.frame = &self.frames[frame_count];
+            return code_pos;
+        }
+
+        pub fn newFunction(self: *Self, name: []const u8) !u32 {
+            std.debug.assert(name.len <= 255);
+
+            const pos = self.data.pos;
+
+            // placeholder until endFunction is called
+            try self.data.write(self.allocator, &.{
+                0, //arity
+                0, 0, 0, 0, // position in code
+            });
+
+            if (comptime config.shouldDebug(.minimal)) {
+                try self.data.write(self.allocator, &.{@intCast(name.len)});
+                try self.data.write(self.allocator, name);
+            }
+
+            return pos;
         }
 
         // Pretty unsafe. If any jumps are issued, the positioning will be messed up
@@ -47,87 +114,95 @@ pub fn ByteCode(comptime config: Config) type {
         // and to then stick it at the end of the block
         pub fn beginCapture(self: *Self) void {
             std.debug.assert(self.temp.pos == 0);
-            self.temp = self.code;
-            self.code = .{};
+            self.frame = &self.temp;
         }
 
         pub fn endCapture(self: *Self) []const u8 {
-            const code = self.code.buf[0..self.code.pos];
-            self.code = self.temp;
-            self.temp = .{};
+            const code = self.frame.buf[0..self.frame.pos];
+            self.frame = &self.frames[self.frame_count];
+            self.temp.pos = 0;
             return code;
         }
 
         pub fn write(self: *Self, data: []const u8) !void {
-            return self.code.write(self.allocator, data);
+            return self.frame.write(self.allocator, data);
         }
 
-        pub fn jump(self: *Self, to: usize) !void {
-            if (to > 65536 ){
-                return error.JumpTooBig;
+        pub fn jump(self: *Self, jump_pos: u32) !void {
+            // jump is only ever used when we're jumping backwards. If we were
+            // jumping forwards, we'd need to use prepareJump + finalizeJump
+            // since the final jump location wouldn't be known yet.
+            std.debug.assert(self.frame.pos > jump_pos);
+
+            // -1 because when the VM executes this, it'll alread have read
+            // the JUMP opcode, and we want our backwards jump to skip that
+            // also
+            const relative: i64 = @as(i64, jump_pos) - self.frame.pos - 1;
+            if (relative < -32_768) {
+                return error.JumpTooLarge;
             }
 
-            var buf: [3]u8 = undefined;
-            buf[0] = @intFromEnum(OpCode.JUMP);
-
-            const u16_to: u16 = @intCast(to);
-            @memcpy(buf[1..], std.mem.asBytes(&u16_to));
-            try self.code.write(self.allocator, &buf);
+            try self.op(.JUMP);
+            var relative_i16: i16 = @intCast(relative);
+            try self.frame.write(self.allocator, std.mem.asBytes(&relative_i16));
         }
 
-        pub fn prepareJump(self: *Self, op_code: OpCode) !usize {
-            const buf: [3]u8 = [_]u8{@intFromEnum(op_code), 0, 0};
-            try self.code.write(self.allocator, &buf);
-            return self.code.pos - 2;
+        pub fn prepareJump(self: *Self, op_code: OpCode) !u32 {
+            try self.op(op_code);
+            // create placeholder for jump address (which finalizeJump will fill)
+            try self.frame.write(self.allocator, &.{0, 0});
+            return @intCast(self.frame.pos);
         }
 
-        pub fn finalizeJump(self: *Self, jump_pos: usize) !void {
-            const pos = self.code.pos;
-            if (pos > 65536 ){
-                return error.JumpTooBig;
+        pub fn finalizeJump(self: *Self, jump_pos: u32) !void {
+            // finalize jump is only ever used when we're jumping forward
+            // (we use prepareJump + finalizeJump because the address to jump
+            // to isn't known yet, so it must be ahead);
+            std.debug.assert(jump_pos < self.frame.pos);
+
+            // +2 because when the VM executes this, it'll be at the 2 byte offset
+            // and we want it to jump that as well.
+            const relative: i64 = 2 + self.frame.pos - @as(i64, jump_pos);
+            if (relative > 32_767) {
+                return error.JumpTooLarge;
             }
 
-            const u16_pos: u16 = @intCast(pos);
-            @memcpy(self.code.buf[jump_pos..jump_pos+2], std.mem.asBytes(&u16_pos));
+            const relative_i16: i16 = @intCast(relative);
+            @memcpy(self.frame.buf[jump_pos - 2..jump_pos], std.mem.asBytes(&relative_i16));
+        }
+
+        pub fn call(self: *Self, data_pos: u32) !void {
+            try self.op(.CALL);
+            return self.frame.write(self.allocator, std.mem.asBytes(&data_pos));
         }
 
         pub fn @"i64"(self: *Self, value: i64) !void {
-            var buf: [9]u8 = undefined;
-            buf[0] = @intFromEnum(OpCode.CONSTANT_I64);
-            @memcpy(buf[1..], std.mem.asBytes(&value));
-            return self.code.write(self.allocator, &buf);
+            try self.op(.CONSTANT_I64);
+            return self.frame.write(self.allocator, std.mem.asBytes(&value));
         }
 
         pub fn @"f64"(self: *Self, value: f64) !void {
-            var buf: [9]u8 = undefined;
-            buf[0] = @intFromEnum(OpCode.CONSTANT_F64);
-            @memcpy(buf[1..], std.mem.asBytes(&value));
-            return self.code.write(self.allocator, &buf);
+            try self.op(.CONSTANT_F64);
+            return self.frame.write(self.allocator, std.mem.asBytes(&value));
         }
 
         pub fn @"bool"(self: *Self, value: bool) !void {
-            var buf: [2]u8 = undefined;
-            buf[0] = @intFromEnum(OpCode.CONSTANT_BOOL);
-            buf[1] = if (value) 1 else 0;
-            return self.code.write(self.allocator, &buf);
+            try self.op(.CONSTANT_BOOL);
+            return self.frame.write(self.allocator, &.{if (value) 1 else 0});
         }
 
         pub fn string(self: *Self, value: []const u8) !void {
-            var buf: [5]u8 = undefined;
-            const header = buf[0..4];
-            const data_start: u32 = @intCast(self.data.pos);
+            const data_start = self.data.pos;
 
             // Storing the end, rather than the length, means one less addition
             // the VM has to do. +4 to skip the data length header itself.
             const data_end: u32 = @intCast(4 + data_start + value.len);
 
-            @memcpy(header, std.mem.asBytes(&data_end));
-            try self.data.write(self.allocator, header);
+            try self.data.write(self.allocator, std.mem.asBytes(&data_end));
             try self.data.write(self.allocator, value);
 
-            buf[0] = @intFromEnum(OpCode.CONSTANT_STRING);
-            @memcpy(buf[1..], std.mem.asBytes(&data_start));
-            return self.code.write(self.allocator, &buf);
+            try self.op(.CONSTANT_STRING);
+            return self.frame.write(self.allocator, std.mem.asBytes(&data_start));
         }
 
         pub fn @"null"(self: *Self) !void {
@@ -135,48 +210,63 @@ pub fn ByteCode(comptime config: Config) type {
         }
 
         pub fn setLocal(self: *Self, local_index: LocalIndex) !void {
-            var buf: [1 + SL]u8 = undefined;
-            buf[0] = @intFromEnum(OpCode.SET_LOCAL);
-            @memcpy(buf[1..], std.mem.asBytes(&local_index));
-            return self.code.write(self.allocator, &buf);
+            try self.op(.SET_LOCAL);
+            return self.frame.write(self.allocator, std.mem.asBytes(&local_index));
         }
 
         pub fn getLocal(self: *Self, local_index: LocalIndex) !void {
-            var buf: [1 + SL]u8 = undefined;
-            buf[0] = @intFromEnum(OpCode.GET_LOCAL);
-            @memcpy(buf[1..], std.mem.asBytes(&local_index));
-            return self.code.write(self.allocator, &buf);
+            try self.op(.GET_LOCAL);
+            return self.frame.write(self.allocator, std.mem.asBytes(&local_index));
         }
 
         pub fn incr(self: *Self, local_index: LocalIndex, value: u8) !void {
-            var buf: [2 + SL]u8 = undefined;
-            buf[0] = @intFromEnum(OpCode.INCR);
-            buf[1] = value;
-            @memcpy(buf[2..2 + SL], std.mem.asBytes(&local_index));
-            return self.code.write(self.allocator, &buf);
+            try self.op(.INCR);
+            try self.frame.write(self.allocator, &.{value});
+            return self.frame.write(self.allocator, std.mem.asBytes(&local_index));
+        }
+
+        pub fn debug(self: *Self, debug_code: OpCode.Debug, len: u16) !void {
+            try self.op(.DEBUG);
+
+            // +1 for the OpCode.Debug
+            // +2 for the length prefix itself
+            // adding them here means the VM doesn't have to add + 3 to the value
+            const total_len: u16 = len + 3;
+            try self.frame.write(self.allocator, std.mem.asBytes(&total_len));
+
+            return self.frame.write(self.allocator, &.{@intFromEnum(debug_code)});
         }
 
         pub fn toBytes(self: *const Self, allocator: Allocator) ![]const u8 {
+            std.debug.assert(self.frame_count == 0);
+
             const code = self.code;
             const data = self.data;
+            const script = self.frames[0];
 
-            const buf = try allocator.alloc(u8, 4 + code.pos + data.pos);
+            const script_start = self.code.pos;
+            const code_len = script_start + script.pos;
 
-            const data_start = 4 + code.pos;
-            const code_len: u32 = @intCast(code.pos);
+            const buf = try allocator.alloc(u8, 8 + code.pos + script.pos + data.pos);
 
             @memcpy(buf[0..4], std.mem.asBytes(&code_len));
-            @memcpy(buf[4..data_start], code.buf[0..code.pos]);
-            @memcpy(buf[data_start..], data.buf[0..data.pos]);
+            @memcpy(buf[4..8], std.mem.asBytes(&script_start));
+
+            const code_end = 8 + self.code.pos;
+            @memcpy(buf[8..code_end], code.buf[0..code.pos]);
+
+            const script_end =  code_end + script.pos;
+            @memcpy(buf[code_end..script_end], script.buf[0..script.pos]);
+            @memcpy(buf[script_end..], data.buf[0..data.pos]);
 
             return buf;
         }
     };
 }
 
-fn Buffer(comptime initial_size: usize) type {
+fn Buffer(comptime initial_size: u32) type {
     return struct {
-        pos: usize = 0,
+        pos: u32 = 0,
         buf: []u8 = &.{},
 
         const Self = @This();
@@ -206,7 +296,7 @@ fn Buffer(comptime initial_size: usize) type {
             }
             const end = pos + data.len;
             @memcpy(buf[pos..end], data);
-            self.pos = end;
+            self.pos = @intCast(end);
         }
     };
 }
@@ -217,17 +307,47 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
 
     var i: usize = 0;
     const code_length = @as(u32, @bitCast(byte_code[0..4].*));
-    const code = byte_code[4 .. code_length + 4];
-    const data = byte_code[code_length + 4..];
+    const script_start = @as(u32, @bitCast(byte_code[4..8].*));
+
+    const code = byte_code[8 .. code_length + 8];
+    const data = byte_code[8 + code_length..];
 
     while (i < code.len) {
+        if (i == script_start) {
+            if (i != 0) {
+                try writer.writeAll("\n");
+            }
+            try writer.writeAll("<main>:\n");
+        }
+        const op_code_pos = i;
         const op_code = std.meta.intToEnum(OpCode, code[i]) catch {
             try std.fmt.format(writer, "{x:0>4} ??? ({d})", .{ i, code[i] });
             return;
         };
-        try std.fmt.format(writer, "{x:0>4} {s}", .{ i, @tagName(op_code) });
+        if (op_code != .DEBUG) {
+            try std.fmt.format(writer, "{x:0>4} {s}", .{ i, @tagName(op_code) });
+        }
+
         i += 1;
         switch (op_code) {
+            .DEBUG => {
+                i += 2; // skip the length, it's only used by the VM to skip over the entire debug op
+                const debug_code: OpCode.Debug = @enumFromInt(code[i]);
+                i += 1;
+                switch (debug_code) {
+                    .FUNCTION_NAME => {
+                        if (i != 4) {
+                            // At this point, if i == 4, then this would be the
+                            // first instruction, and we don't want to prepend a \n
+                            try writer.writeAll("\n");
+                        }
+                        const function_name_len = code[i];
+                        i += 1;
+                        try std.fmt.format(writer, "{x:0>4} fn {s}:\n", .{op_code_pos, code[i..i+function_name_len] });
+                        i += function_name_len;
+                    }
+                }
+            },
             .CONSTANT_I64 => {
                 const value = @as(*align(1) const i64, @ptrCast(code[i..(i + 8)])).*;
                 try std.fmt.format(writer, " {d}\n", .{value});
@@ -250,13 +370,15 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 try std.fmt.format(writer, " {s}\n", .{data[header_end..string_end]});
             },
             .JUMP => {
-                const pos = @as(u16, @bitCast(code[i..i+2][0..2].*));
-                try std.fmt.format(writer, " {x:0>4}\n", .{pos});
+                const relative = @as(i16, @bitCast(code[i..i+2][0..2].*));
+                const target: u32 = @intCast(@as(i32, @intCast(i)) + relative);
+                try std.fmt.format(writer, " {x:0>4}\n", .{target});
                 i += 2;
             },
             .JUMP_IF_FALSE => {
-                const pos = @as(u16, @bitCast(code[i..i+2][0..2].*));
-                try std.fmt.format(writer, " {x:0>4}\n", .{pos});
+                const relative = @as(i16, @bitCast(code[i..i+2][0..2].*));
+                const target: u32 = @intCast(@as(i32, @intCast(i)) + relative);
+                try std.fmt.format(writer, " {x:0>4}\n", .{target});
                 i += 2;
             },
             .SET_LOCAL => {
@@ -278,34 +400,56 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 i += SL;
                 try std.fmt.format(writer, " @{d} {d}\n", .{idx, value});
             },
+            .CALL => {
+                const header_start = @as(u32, @bitCast(code[i..i+4][0..4].*));
+                i += 4;
+
+                const arity = data[header_start];
+                var d = data[header_start + 1 ..];
+                const jump: u32 = @bitCast(d[0..4].*);
+                try std.fmt.format(writer, " {d} {x:0>4}", .{arity, jump});
+                if (comptime config.shouldDebug(.minimal)) {
+                    d = d[4..];
+                    const name_length = d[0];
+                    try std.fmt.format(writer, " ({s})", .{d[1..name_length + 1]});
+                }
+                try std.fmt.format(writer, "\n", .{});
+            },
             else => try writer.writeAll("\n"),
         }
     }
 }
 
 pub const OpCode = enum(u8) {
-    ADD = 0,
-    CONSTANT_BOOL = 1,
-    CONSTANT_F64 = 2,
-    CONSTANT_I64 = 3,
-    CONSTANT_NULL = 4,
-    CONSTANT_STRING = 5,
-    DIVIDE = 6,
-    EQUAL = 7,
-    GET_LOCAL = 8,
-    GREATER = 10,
-    INCR = 11,
-    JUMP = 12,
-    JUMP_IF_FALSE = 13,
-    LESSER = 14,
-    MULTIPLY = 15,
-    NEGATE = 16,
-    NOT = 17,
-    POP = 18,
-    PRINT = 19,
-    RETURN = 20,
-    SET_LOCAL = 21,
-    SUBTRACT = 22,
+    DEBUG = 0,
+    ADD,
+    CALL,
+    CONSTANT_BOOL,
+    CONSTANT_F64,
+    CONSTANT_I64,
+    CONSTANT_NULL,
+    CONSTANT_STRING,
+    DIVIDE,
+    EQUAL,
+    GET_LOCAL,
+    GREATER,
+    INCR,
+    JUMP,
+    JUMP_IF_FALSE,
+    LESSER,
+    MODULUS,
+    MULTIPLY,
+    NEGATE,
+    NOT,
+    POP,
+    PRINT,
+    RETURN,
+    SET_LOCAL,
+    SUBTRACT,
+
+    const Debug = enum {
+        FUNCTION_NAME,
+    };
 };
 
 const t = @import("t.zig");
@@ -329,13 +473,15 @@ test "bytecode: write + disassemble" {
     defer t.reset();
 
     var b = try ByteCode(.{}).init(t.arena.allocator());
+    b.beginScript();
     try b.i64(-388491034);
     try b.f64(12.34567);
     try b.bool(true);
     try b.bool(false);
     try b.null();
     try b.op(OpCode.RETURN);
-    try expectDisassemble(b,
+    try expectDisassemble(.{}, b,
+        \\<main>:
         \\0000 CONSTANT_I64 -388491034
         \\0009 CONSTANT_F64 12.34567
         \\0012 CONSTANT_BOOL true
@@ -346,13 +492,95 @@ test "bytecode: write + disassemble" {
     );
 }
 
-fn expectDisassemble(b: anytype, expected: []const u8) !void {
+test "bytecode: functions debug none" {
+    defer t.reset();
+    const config = Config{.debug = .none};
+
+    var b = try ByteCode(config).init(t.arena.allocator());
+    b.beginScript();
+
+    const data_pos = try b.newFunction("sum");
+    try b.beginFunction("sum");
+    try b.f64(44);
+    try b.op(.RETURN);
+
+    _ = try b.endFunction(data_pos, 2);
+    try b.call(data_pos);
+    try b.op(.RETURN);
+
+    try expectDisassemble(config, b,
+        \\0000 CONSTANT_F64 44
+        \\0009 RETURN
+        \\
+        \\<main>:
+        \\000a CALL 2 0000
+        \\000f RETURN
+        \\
+    );
+}
+
+test "bytecode: functions debug minimal" {
+    defer t.reset();
+    const config = Config{.debug = .minimal};
+
+    var b = try ByteCode(config).init(t.arena.allocator());
+    b.beginScript();
+
+    const data_pos = try b.newFunction("sum");
+    try b.beginFunction("sum");
+    try b.f64(44);
+    try b.op(.RETURN);
+
+    _ = try b.endFunction(data_pos, 2);
+    try b.call(data_pos);
+    try b.op(.RETURN);
+
+    try expectDisassemble(config, b,
+        \\0000 CONSTANT_F64 44
+        \\0009 RETURN
+        \\
+        \\<main>:
+        \\000a CALL 2 0000 (sum)
+        \\000f RETURN
+        \\
+    );
+}
+
+test "bytecode: functions debug full" {
+    defer t.reset();
+    const config = Config{.debug = .full};
+
+    var b = try ByteCode(config).init(t.arena.allocator());
+    b.beginScript();
+
+    const data_pos = try b.newFunction("sum");
+    try b.beginFunction("sum");
+    try b.f64(44);
+    try b.op(.RETURN);
+
+    _ = try b.endFunction(data_pos, 2);
+    try b.call(data_pos);
+    try b.op(.RETURN);
+
+    try expectDisassemble(config, b,
+        \\0000 fn sum:
+        \\0008 CONSTANT_F64 44
+        \\0011 RETURN
+        \\
+        \\<main>:
+        \\0012 CALL 2 0000 (sum)
+        \\0017 RETURN
+        \\
+    );
+}
+
+fn expectDisassemble(comptime config: Config, b: anytype, expected: []const u8) !void {
     var arr = std.ArrayList(u8).init(t.allocator);
     defer arr.deinit();
 
     const byte_code = try b.toBytes(t.allocator);
     defer t.allocator.free(byte_code);
 
-    try disassemble(.{}, byte_code, arr.writer());
+    try disassemble(config, byte_code, arr.writer());
     try t.expectString(expected, arr.items);
 }
