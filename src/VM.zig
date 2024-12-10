@@ -64,6 +64,7 @@ pub fn VM(comptime config: Config) type {
                 const op_code: OpCode = @enumFromInt(ip[0]);
                 ip += 1;
                 switch (op_code) {
+                    .POP => _ = stack.pop(),
                     .CONSTANT_I64 => {
                         const value = @as(i64, @bitCast(ip[0..8].*));
                         try stack.append(allocator, .{ .i64 = value });
@@ -86,7 +87,9 @@ pub fn VM(comptime config: Config) type {
                         const string_end = @as(u32, @bitCast(data[data_start..string_start][0..4].*));
                         try stack.append(allocator, .{ .string = data[string_start..string_end] });
                     },
-                    .CONSTANT_NULL => try stack.append(allocator, .{ .null = {} }),
+                    .CONSTANT_NULL => {
+                        try stack.append(allocator, .{ .null = {} });
+                    },
                     .GET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
                         try stack.append(allocator, stack.items[frame_pointer + idx]);
@@ -155,6 +158,27 @@ pub fn VM(comptime config: Config) type {
                         try stack.append(allocator, v);
                         stack.items[adjusted_idx] = v;
                     },
+                    .INITIALIZE_ARRAY => {
+                        const value_count: u32 = @bitCast(ip[0..4].*);
+                        ip += 4;
+                        if (value_count == 0) {
+                            try stack.append(allocator, .{.array = .{}});
+                        } else {
+                            std.debug.assert(stack.items.len >= value_count);
+
+                            var arr: Value.List = .{};
+                            try arr.ensureTotalCapacity(allocator, value_count);
+
+                            var items = stack.items;
+                            for (items[items.len - value_count..]) |v| {
+                                arr.appendAssumeCapacity(v);
+                            }
+                            stack.items.len -= value_count;
+                            // we popped at least 1 value off the stack, there
+                            // has to be space for our array
+                            stack.appendAssumeCapacity(.{.array = arr});
+                        }
+                    },
                     .CALL => {
                         const data_start = @as(u32, @bitCast(ip[0..4].*));
                         ip += 4;
@@ -183,7 +207,6 @@ pub fn VM(comptime config: Config) type {
                         };
                     },
                     .PRINT => std.debug.print("{}\n", .{stack.pop()}),
-                    .POP => _ = stack.pop(),
                     .RETURN => {
                         const value = stack.pop();
                         if (frame_count == 0) {
@@ -309,32 +332,9 @@ pub fn VM(comptime config: Config) type {
         }
 
         fn equal(self: *Self, left: Value, right: Value) anyerror!bool {
-            switch (left) {
-                .bool => |l| switch (right) {
-                    .bool => |r| return l == r,
-                    .null => return false,
-                    else => {},
-                },
-                .f64 => |l| switch (right) {
-                    .f64 => |r| return l == r,
-                    .i64 => |r| return l == @as(f64, @floatFromInt(r)),
-                    .null => return false,
-                    else => {},
-                },
-                .i64 => |l| switch (right) {
-                    .i64 => |r| return l == r,
-                    .f64 => |r| return @as(f64, @floatFromInt(l)) == r,
-                    .null => return false,
-                    else => {},
-                },
-                .null => return right == .null,
-                .string => |l| switch (right) {
-                    .string => |r| return std.mem.eql(u8, l, r),
-                    .null => return false,
-                    else => {},
-                },
-            }
-            return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} == {s} ({s}, {s})", .{ left, right, @tagName(left), @tagName(right) });
+           return left.equal(right) catch {
+                return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} == {s} ({s}, {s})", .{ left, right, @tagName(left), @tagName(right) });
+           };
         }
 
         fn greater(self: *Self, left: Value, right: Value) anyerror!bool {
@@ -378,10 +378,6 @@ pub fn VM(comptime config: Config) type {
             }
             return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, @tagName(left), @tagName(right) });
         }
-
-        // inline fn values(self: *const Self) [*]Value {
-        //     return @ptrFromInt(@intFromPtr(self._frame_pointer) - @sizeOf(Value));
-        // }
 
         fn setErrorFmt(self: *Self, err: anyerror, comptime fmt: []const u8, args: anytype) anyerror {
             self.err = .{

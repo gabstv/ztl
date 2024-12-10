@@ -209,6 +209,11 @@ pub fn ByteCode(comptime config: Config) type {
             return self.op(OpCode.CONSTANT_NULL);
         }
 
+        pub fn initializeArray(self: *Self, value_count: u32) !void {
+            try self.op(.INITIALIZE_ARRAY);
+            return self.frame.write(self.allocator, std.mem.asBytes(&value_count));
+        }
+
         pub fn setLocal(self: *Self, local_index: LocalIndex) !void {
             try self.op(.SET_LOCAL);
             return self.frame.write(self.allocator, std.mem.asBytes(&local_index));
@@ -400,6 +405,11 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 i += SL;
                 try std.fmt.format(writer, " @{d} {d}\n", .{idx, value});
             },
+            .INITIALIZE_ARRAY => {
+                const value_count: u32 = @bitCast(code[i..i+4][0..4].*);
+                try std.fmt.format(writer, " {d}\n", .{value_count});
+                i += 4;
+            },
             .CALL => {
                 const header_start = @as(u32, @bitCast(code[i..i+4][0..4].*));
                 i += 4;
@@ -434,6 +444,7 @@ pub const OpCode = enum(u8) {
     GET_LOCAL,
     GREATER,
     INCR,
+    INITIALIZE_ARRAY,
     JUMP,
     JUMP_IF_FALSE,
     LESSER,

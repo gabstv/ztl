@@ -221,6 +221,11 @@ pub fn Compiler(comptime config: Config) type {
         }
 
         fn statement(self: *Self) CompileError!void {
+            const scope = self.currentScope();
+            if (scope.has_return) {
+                self.setError("Unreachable code detected", null);
+                return error.CompileError;
+            }
             var bc = &self._byte_code;
             switch (self._current_token.value) {
                 .LEFT_BRACE => {
@@ -332,7 +337,7 @@ pub fn Compiler(comptime config: Config) type {
                         try self.consumeSemicolon();
                         try bc.op(.RETURN);
                     }
-                    self.currentScope().has_return = true;
+                    scope.has_return = true;
                 },
                 .PRINT => {
                     try self.advance();
@@ -536,6 +541,21 @@ pub fn Compiler(comptime config: Config) type {
             }
         }
 
+        fn array(self: *Self, _: bool) CompileError!void {
+            var value_count: u32 = 0;
+            if (try self.match(.RIGHT_BRACKET) == false) {
+                while (true) {
+                    value_count += 1;
+                    try self.expression();
+                    if (try self.match(.RIGHT_BRACKET)) {
+                        break;
+                    }
+                    try self.consume(.COMMA, "value separator (',')");
+                }
+            }
+            try self._byte_code.initializeArray(value_count);
+        }
+
         fn call(self: *Self) CompileError!void {
             const name = self._previous_token.value.IDENTIFIER;
 
@@ -730,6 +750,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.IF, null, null, Precedence.NONE },
             .{ Token.Type.INTEGER, null, C.number, Precedence.NONE },
             .{ Token.Type.LEFT_BRACE, null, null, Precedence.NONE },
+            .{ Token.Type.LEFT_BRACKET, null, C.array, Precedence.NONE },
             .{ Token.Type.LEFT_PARENTHESIS, null, C.grouping, Precedence.NONE },
             .{ Token.Type.LESSER, C.binary, null, Precedence.COMPARISON },
             .{ Token.Type.LESSER_EQUAL, C.binary, null, Precedence.COMPARISON },
@@ -746,14 +767,6 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.STAR, C.binary, null, Precedence.FACTOR },
             .{ Token.Type.STRING, null, C.string, Precedence.NONE },
             .{ Token.Type.VAR, null, null, Precedence.NONE },
-            // .{Token.Type.WHILE, null, null, Precedence.NONE},
-            // .{Token.Type.CLASS, null, null, Precedence.NONE},
-            // .{Token.Type.ERROR, null, null, Precedence.NONE},
-            // .{Token.Type.FOR, null, null, Precedence.NONE},
-            // .{Token.Type.FUN, null, null, Precedence.NONE},
-            // .{Token.Type.PRINT, null, null, Precedence.NONE},
-            // .{Token.Type.SUPER, null, null, Precedence.NONE},
-            // .{Token.Type.THIS, null, null, Precedence.NONE},
         });
 
         fn buildParseRules(definitions: anytype) [maxRuleIndex(Token.Type)]Self {

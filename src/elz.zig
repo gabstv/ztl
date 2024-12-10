@@ -551,6 +551,42 @@ test "elz: functions" {
     );
 
     try testError("Identifier \"" ++ "x" ** 128 ++ "\" exceeds the character limit of 127", "fn " ++ "x" ** 128 ++ "(){}");
+
+    try testError("Unreachable code detected",
+        \\ fn a() {
+        \\  return "a";
+        \\  return "b";
+        \\ }
+    );
+}
+
+test "elz: arrays" {
+    {
+        var arr = [_]Value{};
+        try testReturnValue(.{.array = .{.items = &arr}}, "return [];");
+    }
+
+    {
+        var arr = [_]Value{
+            .{.bool = true},
+            .{.f64 = 1.992},
+            .{.string = "over 9000!"},
+        };
+        try testReturnValue(.{.array = .{.items = &arr}}, "return [true, 1.992, `over 9000!`];");
+    }
+
+    {
+        var arr = [_]Value{
+            .{.null = {}},
+            .{.i64 = 1},
+            .{.string = "hello"},
+        };
+        try testReturnValue(.{.array = .{.items = &arr}},
+            \\ var n = null;
+            \\ var other = "hello";
+            \\ return [n, 1, other];
+        );
+    }
 }
 
 fn testReturnValue(expected: Value, src: []const u8) !void {
@@ -571,7 +607,7 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
 
         const byte_code = try c.byteCode(t.allocator);
         defer t.allocator.free(byte_code);
-        // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
+        disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
         var vm = VM(config).init(t.allocator);
         defer vm.deinit();
@@ -585,12 +621,7 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
             return err;
         };
 
-        try t.expectString(@tagName(expected), @tagName(value));
-
-        switch (value) {
-            .string => |str| try t.expectString(expected.string, str),
-            else => try t.expectEqual(expected, value),
-        }
+        try t.expectEqual(true, expected.equal(value));
     }
 }
 
