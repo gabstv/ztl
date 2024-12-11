@@ -444,6 +444,7 @@ pub const OpCode = enum(u8) {
     GET_LOCAL,
     GREATER,
     INCR,
+    INDEX_GET,
     INITIALIZE_ARRAY,
     JUMP,
     JUMP_IF_FALSE,

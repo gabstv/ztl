@@ -560,7 +560,7 @@ test "elz: functions" {
     );
 }
 
-test "elz: arrays" {
+test "elz: array initialization" {
     {
         var arr = [_]Value{};
         try testReturnValue(.{.array = .{.items = &arr}}, "return [];");
@@ -588,6 +588,35 @@ test "elz: arrays" {
         );
     }
 }
+test "elz: array indexing" {
+    try testReturnValue(.{.i64 = 10}, "return [10, 2002, 5][0];");
+    try testReturnValue(.{.i64 = 2002}, "return [10, 2002, 5][1];");
+    try testReturnValue(.{.i64 = 5}, "return [10, 2002, 5][2];");
+    try testReturnValue(.{.i64 = 5}, "return [10, 2002, 5][-1];");
+    try testReturnValue(.{.i64 = 2002}, "return [10, 2002, 5][-2];");
+    try testReturnValue(.{.i64 = 10}, "return [10, 2002, 5][-3];");
+
+    try testRuntimeError("Index out of range. Index: 0, Len: 0", "return [][0];");
+    try testRuntimeError("Index out of range. Index: 1, Len: 0", "return [][1];");
+    try testRuntimeError("Index out of range. Index: 1, Len: 1", "return [0][1];");
+    try testRuntimeError("Index out of range. Index: -1, Len: 0", "return [][-1];");
+    try testRuntimeError("Index out of range. Index: -3, Len: 2", "return [1,2][-3];");
+}
+
+test "elz: string indexing" {
+    try testReturnValue(.{.string = "a"}, "return `abc`[0];");
+    try testReturnValue(.{.string = "b"}, "return `abc`[1];");
+    try testReturnValue(.{.string = "c"}, "return `abc`[2];");
+    try testReturnValue(.{.string = "c"}, "return `abc`[-1];");
+    try testReturnValue(.{.string = "b"}, "return `abc`[-2];");
+    try testReturnValue(.{.string = "a"}, "return `abc`[-3];");
+
+    try testRuntimeError("Index out of range. Index: 0, Len: 0", "return ``[0];");
+    try testRuntimeError("Index out of range. Index: 1, Len: 0", "return ``[1];");
+    try testRuntimeError("Index out of range. Index: 1, Len: 1", "return `a`[1];");
+    try testRuntimeError("Index out of range. Index: -1, Len: 0", "return ``[-1];");
+    try testRuntimeError("Index out of range. Index: -3, Len: 2", "return `ab`[-3];");
+}
 
 fn testReturnValue(expected: Value, src: []const u8) !void {
     const configs = [_]Config{
@@ -607,7 +636,7 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
 
         const byte_code = try c.byteCode(t.allocator);
         defer t.allocator.free(byte_code);
-        disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
+        // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
         var vm = VM(config).init(t.allocator);
         defer vm.deinit();
@@ -638,5 +667,34 @@ fn testError(expected: []const u8, src: []const u8) !void {
         return;
     };
 
+    return error.NoError;
+}
+
+
+fn testRuntimeError(expected: []const u8, src: []const u8) !void {
+    const config = Preset.small;
+    var c = try Compiler(config).init(t.allocator);
+    defer c.deinit();
+
+    c.compile(src) catch |err| {
+        std.debug.print("Compilation error: {}\n", .{c.err.?});
+        return err;
+    };
+
+    const byte_code = try c.byteCode(t.allocator);
+    defer t.allocator.free(byte_code);
+    // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
+
+    var vm = VM(config).init(t.allocator);
+    defer vm.deinit();
+
+    _ = vm.run(byte_code) catch {
+        const ve = vm.err orelse unreachable;
+        if (std.mem.indexOf(u8, ve.desc, expected) == null) {
+            std.debug.print("Wrong error, expected: {s} but got:\n{s}\n", .{ expected, ve.desc });
+            return error.WrongError;
+        }
+        return;
+    };
     return error.NoError;
 }

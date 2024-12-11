@@ -556,6 +556,12 @@ pub fn Compiler(comptime config: Config) type {
             try self._byte_code.initializeArray(value_count);
         }
 
+        fn index(self: *Self) CompileError!void {
+            try self.expression();
+            try self.consume(.RIGHT_BRACKET, "left bracket (']')");
+            try self._byte_code.op(.INDEX_GET);
+        }
+
         fn call(self: *Self) CompileError!void {
             const name = self._previous_token.value.IDENTIFIER;
 
@@ -750,7 +756,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.IF, null, null, Precedence.NONE },
             .{ Token.Type.INTEGER, null, C.number, Precedence.NONE },
             .{ Token.Type.LEFT_BRACE, null, null, Precedence.NONE },
-            .{ Token.Type.LEFT_BRACKET, null, C.array, Precedence.NONE },
+            .{ Token.Type.LEFT_BRACKET, C.index, C.array, Precedence.CALL },
             .{ Token.Type.LEFT_PARENTHESIS, null, C.grouping, Precedence.NONE },
             .{ Token.Type.LESSER, C.binary, null, Precedence.COMPARISON },
             .{ Token.Type.LESSER_EQUAL, C.binary, null, Precedence.COMPARISON },

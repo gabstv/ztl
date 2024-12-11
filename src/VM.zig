@@ -126,6 +126,7 @@ pub fn VM(comptime config: Config) type {
                     .JUMP => {
                         // really??
                         const relative: i16 = @bitCast(ip[0..2].*);
+                        std.debug.assert(@abs(relative) <= code.len);
                         if (relative >= 0) {
                             ip += @intCast(relative);
                         } else {
@@ -137,8 +138,10 @@ pub fn VM(comptime config: Config) type {
                             // just skip the jump address
                             ip += 2;
                         } else {
-                            // really??
                            const relative: i16 = @bitCast(ip[0..2].*);
+                           std.debug.assert(@abs(relative) <= code.len);
+
+                            // really??
                             if (relative >= 0) {
                                 ip += @intCast(relative);
                             } else {
@@ -178,6 +181,19 @@ pub fn VM(comptime config: Config) type {
                             // has to be space for our array
                             stack.appendAssumeCapacity(.{.array = arr});
                         }
+                    },
+                    .INDEX_GET => {
+                        var values = stack.items;
+
+                        const l = values.len;
+                        std.debug.assert(l >= 2);
+
+                        const last_value_index = l - 1;
+
+                        const target = values[l - 2];
+                        // replace the array with whatever we got
+                        values[l - 2] = try self.getIndexed(target, values[last_value_index]);
+                        stack.items.len = last_value_index;
                     },
                     .CALL => {
                         const data_start = @as(u32, @bitCast(ip[0..4].*));
@@ -230,11 +246,10 @@ pub fn VM(comptime config: Config) type {
             }
         }
 
-
         fn arithmetic(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) anyerror!Value) !void {
             var values = stack.items;
+            std.debug.assert(values.len >= 2);
             const right_index = values.len - 1;
-            std.debug.assert(right_index >= 1);
 
             const left_index = right_index - 1;
             values[left_index] = try operation(self, values[left_index], values[right_index]);
@@ -377,6 +392,48 @@ pub fn VM(comptime config: Config) type {
                 else => {},
             }
             return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, @tagName(left), @tagName(right) });
+        }
+
+        fn getIndexed(self: *Self, target: Value, index: Value) !Value {
+            switch (target) {
+                .array => |arr| {
+                    const len = arr.items.len;
+                    switch (index) {
+                        .i64 => |i| {
+                            const actual_index = try self.resolveScalarIndex(len, i);
+                            return arr.items[actual_index];
+                        },
+                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{@tagName(index)}),
+                    }
+                },
+                .string => |str| {
+                    const len = str.len;
+                      switch (index) {
+                        .i64 => |i| {
+                            const actual_index = try self.resolveScalarIndex(len, i);
+                            return .{.string = str[actual_index..actual_index+1]};
+                        },
+                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{@tagName(index)}),
+                    }
+                },
+                else => return self.setErrorFmt(error.TypeError, "Only arrays, maps and strings can be indexed. Cannot index an {s}", .{@tagName(target)}),
+            }
+        }
+
+        fn resolveScalarIndex(self: *Self, len: usize, index: i64) !usize {
+            if (index >= 0) {
+                if (index >= len) {
+                    return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{index, len});
+                }
+                return @intCast(index);
+            }
+
+            // index is negative
+            const abs_index = @as(i64, @intCast(len)) + index;
+            if (abs_index < 0) {
+                return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{index, len});
+            }
+            return @intCast(abs_index);
         }
 
         fn setErrorFmt(self: *Self, err: anyerror, comptime fmt: []const u8, args: anytype) anyerror {
