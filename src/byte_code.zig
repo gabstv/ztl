@@ -3,6 +3,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Config = @import("config.zig").Config;
 
+pub const VERSION: u8 = 0;
+
 pub fn ByteCode(comptime config: Config) type {
     return struct {
         allocator: Allocator,
@@ -252,13 +254,14 @@ pub fn ByteCode(comptime config: Config) type {
             const script_start = self.code.pos;
             const code_len = script_start + script.pos;
 
-            const buf = try allocator.alloc(u8, 8 + code.pos + script.pos + data.pos);
+            const buf = try allocator.alloc(u8, 9 + code.pos + script.pos + data.pos);
 
-            @memcpy(buf[0..4], std.mem.asBytes(&code_len));
-            @memcpy(buf[4..8], std.mem.asBytes(&script_start));
+            buf[0] = VERSION;
+            @memcpy(buf[1..5], std.mem.asBytes(&code_len));
+            @memcpy(buf[5..9], std.mem.asBytes(&script_start));
 
-            const code_end = 8 + self.code.pos;
-            @memcpy(buf[8..code_end], code.buf[0..code.pos]);
+            const code_end = 9 + self.code.pos;
+            @memcpy(buf[9..code_end], code.buf[0..code.pos]);
 
             const script_end =  code_end + script.pos;
             @memcpy(buf[code_end..script_end], script.buf[0..script.pos]);
@@ -311,11 +314,12 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
     const SL = @sizeOf(LocalIndex);
 
     var i: usize = 0;
-    const code_length = @as(u32, @bitCast(byte_code[0..4].*));
-    const script_start = @as(u32, @bitCast(byte_code[4..8].*));
+    const code_length = @as(u32, @bitCast(byte_code[1..5].*));
+    const script_start = @as(u32, @bitCast(byte_code[5..9].*));
 
-    const code = byte_code[8 .. code_length + 8];
-    const data = byte_code[8 + code_length..];
+    const code = byte_code[9 .. code_length + 9];
+    const data = byte_code[9 + code_length..];
+    try std.fmt.format(writer, "// Version: {d}\n", .{ byte_code[0] });
 
     while (i < code.len) {
         if (i == script_start) {
@@ -495,6 +499,7 @@ test "bytecode: write + disassemble" {
     try b.null();
     try b.op(OpCode.RETURN);
     try expectDisassemble(.{}, b,
+        \\// Version: 0
         \\<main>:
         \\0000 CONSTANT_I64 -388491034
         \\0009 CONSTANT_F64 12.34567
@@ -523,6 +528,7 @@ test "bytecode: functions debug none" {
     try b.op(.RETURN);
 
     try expectDisassemble(config, b,
+        \\// Version: 0
         \\0000 CONSTANT_F64 44
         \\0009 RETURN
         \\
@@ -550,6 +556,7 @@ test "bytecode: functions debug minimal" {
     try b.op(.RETURN);
 
     try expectDisassemble(config, b,
+        \\// Version: 0
         \\0000 CONSTANT_F64 44
         \\0009 RETURN
         \\
@@ -577,6 +584,7 @@ test "bytecode: functions debug full" {
     try b.op(.RETURN);
 
     try expectDisassemble(config, b,
+        \\// Version: 0
         \\0000 fn sum:
         \\0008 CONSTANT_F64 44
         \\0011 RETURN

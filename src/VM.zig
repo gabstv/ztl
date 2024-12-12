@@ -3,6 +3,7 @@ const std = @import("std");
 const Value = @import("value.zig").Value;
 const Config = @import("config.zig").Config;
 const OpCode = @import("byte_code.zig").OpCode;
+const VERSION = @import("byte_code.zig").VERSION;
 
 const Allocator = std.mem.Allocator;
 
@@ -35,18 +36,23 @@ pub fn VM(comptime config: Config) type {
         }
 
         pub fn run(self: *Self, byte_code: []const u8) !Value {
-            var ip = byte_code.ptr;
-            const code_end = 8 + @as(u32, @bitCast(ip[0..4].*));
+            const version = byte_code[0];
+            if (version != VERSION) {
+                return error.IncompatibleVersion;
+            }
 
-            if (code_end == 8) {
+            var ip = byte_code.ptr;
+            const code_end = 9 + @as(u32, @bitCast(ip[1..5].*));
+
+            if (code_end == 9) {
                 return .{.null = {}};
             }
 
-            const code = byte_code[8..code_end];
+            const code = byte_code[9..code_end];
             const data = byte_code[code_end..];
 
             // goto to the main script
-            ip += 8 + @as(u32, @bitCast(ip[4..8].*));
+            ip += 9 + @as(u32, @bitCast(ip[5..9].*));
 
             const allocator = self._arena.allocator();
 
