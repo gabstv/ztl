@@ -717,6 +717,8 @@ test "elz: orelse" {
     try testReturnValue(.{.i64 = 4}, "return 4 orelse 1;");
     try testReturnValue(.{.i64 = 2}, "return null orelse 2;");
     try testReturnValue(.{.i64 = 3}, "return null orelse 2+1;");
+    try testReturnValue(.{.string = "hi"}, "return null orelse null orelse null orelse `hi`;");
+    try testReturnValue(.{.i64 = 1}, "return 1 orelse null orelse null orelse `hi`;");
 }
 
 fn testReturnValue(expected: Value, src: []const u8) !void {
