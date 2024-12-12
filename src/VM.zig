@@ -195,6 +195,29 @@ pub fn VM(comptime config: Config) type {
                         values[l - 2] = try self.getIndexed(target, values[last_value_index]);
                         stack.items.len = last_value_index;
                     },
+                    .INDEX_SET => {
+                        const values = stack.items;
+                        const l = values.len;
+                        std.debug.assert(l >= 3);
+
+                        const target = values[l - 3];
+                        const index = values[l - 2];
+                        const value = values[l - 1];
+                        // replace the array with whatever we got
+                        try self.setIndexed(target, index, value);
+                        stack.items.len = l - 2;
+                    },
+                    .INCR_REF => {
+                        const values = stack.items;
+                        const l = values.len;
+                        std.debug.assert(l >= 3);
+
+                        const target = values[l - 3];
+                        const index = values[l - 2];
+                        const incr = values[l - 1];
+                        values[l - 3] = try self.incrementIndexed(target, index, incr);
+                        stack.items.len = l - 2;
+                    },
                     .CALL => {
                         const data_start = @as(u32, @bitCast(ip[0..4].*));
                         ip += 4;
@@ -348,7 +371,7 @@ pub fn VM(comptime config: Config) type {
 
         fn equal(self: *Self, left: Value, right: Value) anyerror!bool {
            return left.equal(right) catch {
-                return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} == {s} ({s}, {s})", .{ left, right, @tagName(left), @tagName(right) });
+                return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} == {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
            };
         }
 
@@ -370,7 +393,7 @@ pub fn VM(comptime config: Config) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} > {s} ({s}, {s})", .{ left, right, @tagName(left), @tagName(right) });
+            return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} > {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
         }
 
         fn lesser(self: *Self, left: Value, right: Value) anyerror!bool {
@@ -391,7 +414,7 @@ pub fn VM(comptime config: Config) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, @tagName(left), @tagName(right) });
+            return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
         }
 
         fn getIndexed(self: *Self, target: Value, index: Value) !Value {
@@ -403,7 +426,7 @@ pub fn VM(comptime config: Config) type {
                             const actual_index = try self.resolveScalarIndex(len, i);
                             return arr.items[actual_index];
                         },
-                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{@tagName(index)}),
+                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{index.friendlyArticleName()}),
                     }
                 },
                 .string => |str| {
@@ -413,10 +436,45 @@ pub fn VM(comptime config: Config) type {
                             const actual_index = try self.resolveScalarIndex(len, i);
                             return .{.string = str[actual_index..actual_index+1]};
                         },
-                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{@tagName(index)}),
+                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{index.friendlyArticleName()}),
                     }
                 },
-                else => return self.setErrorFmt(error.TypeError, "Only arrays, maps and strings can be indexed. Cannot index an {s}", .{@tagName(target)}),
+                else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
+            }
+        }
+
+        fn setIndexed(self: *Self, target: Value, index: Value, value: Value) !void {
+            switch (target) {
+                .array => |arr| {
+                    const len = arr.items.len;
+                    switch (index) {
+                        .i64 => |i| {
+                            const actual_index = try self.resolveScalarIndex(len, i);
+                            arr.items[actual_index] = value;
+                        },
+                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{index.friendlyArticleName()}),
+                    }
+                },
+                else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
+            }
+        }
+
+        fn incrementIndexed(self: *Self, target: Value, index: Value, incr: Value) !Value {
+            switch (target) {
+                .array => |arr| {
+                    const len = arr.items.len;
+                    switch (index) {
+                        .i64 => |i| {
+                            const actual_index = try self.resolveScalarIndex(len, i);
+                            const value = arr.items[actual_index];
+                            const result = try self.add(value, incr);
+                            arr.items[actual_index] = result;
+                            return result;
+                        },
+                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{index.friendlyArticleName()}),
+                    }
+                },
+                else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
             }
         }
 

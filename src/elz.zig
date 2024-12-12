@@ -588,6 +588,7 @@ test "elz: array initialization" {
         );
     }
 }
+
 test "elz: array indexing" {
     try testReturnValue(.{.i64 = 10}, "return [10, 2002, 5][0];");
     try testReturnValue(.{.i64 = 2002}, "return [10, 2002, 5][1];");
@@ -603,6 +604,87 @@ test "elz: array indexing" {
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return [1,2][-3];");
 }
 
+test "elz: array assignment" {
+    try testReturnValue(.{.i64 = 10},
+        \\ var arr = [0];
+        \\ arr[0] = 10;
+        \\ return arr[0];
+    );
+
+    try testReturnValue(.{.string = "a"},
+        \\ var arr = [0, 1, 2];
+        \\ arr[2] = "a";
+        \\ return arr[2];
+    );
+
+    try testReturnValue(.{.bool = true},
+        \\ var arr = [0, 1, 2];
+        \\ arr[-1] = true;
+        \\ return arr[2];
+    );
+
+    try testReturnValue(.{.string = "x"},
+        \\ var arr = [0, 1, 2];
+        \\ arr[-2] = "x";
+        \\ return arr[1];
+    );
+
+    try testReturnValue(.{.string = "a"},
+        \\ var arr = [0, 1, 2];
+        \\ arr[-3] = "a";
+        \\ return arr[0];
+    );
+
+    try testReturnValue(.{.i64 = 11},
+        \\ var arr = [0, 5, 6];
+        \\ arr[1] = arr[1] + arr[2];
+        \\ return arr[1];
+    );
+
+    try testReturnValue(.{.i64 = 6},
+        \\ var arr = [0, 5, 2];
+        \\ arr[1]++;
+        \\ return arr[1];
+    );
+
+    try testReturnValue(.{.f64 = 2.2},
+        \\ var arr = [0, 5, 3.2];
+        \\ var idx = 2;
+        \\ arr[idx]--;
+        \\ return arr[idx];
+    );
+
+    try testReturnValue(.{.i64 = 13},
+        \\ var arr = [0, 5, 2];
+        \\ arr[1] += 8;
+        \\ return arr[1];
+    );
+
+    try testReturnValue(.{.f64 = -7.7},
+        \\ var arr = [0, 5, 3.2];
+        \\ var idx = 2;
+        \\ arr[idx] -= 10.9;
+        \\ return arr[idx];
+    );
+
+    try testReturnValue(.{.f64 = 16.3},
+        \\ var arr = [0, 5, 3.2];
+        \\ var idx = 2;
+        \\ arr[idx] -= -13.1;
+        \\ return arr[idx];
+    );
+
+    try testReturnValue(.{.i64 = 8},
+        \\ var arr = [0, 7, 2];
+        \\ return arr[1]++;
+    );
+
+    try testRuntimeError("Index out of range. Index: 0, Len: 0", "[][0] = 1;");
+    try testRuntimeError("Index out of range. Index: -1, Len: 0", "[][-1] = 1;");
+    try testRuntimeError("Index out of range. Index: 1, Len: 1", "[1][1] = 1;");
+    try testRuntimeError("Index out of range. Index: -2, Len: 1", "[1][-2] = 1;");
+}
+
 test "elz: string indexing" {
     try testReturnValue(.{.string = "a"}, "return `abc`[0];");
     try testReturnValue(.{.string = "b"}, "return `abc`[1];");
@@ -616,6 +698,19 @@ test "elz: string indexing" {
     try testRuntimeError("Index out of range. Index: 1, Len: 1", "return `a`[1];");
     try testRuntimeError("Index out of range. Index: -1, Len: 0", "return ``[-1];");
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return `ab`[-3];");
+}
+
+test "elz: invalid type indexing" {
+    try testRuntimeError("Cannot index an integer", "return 0[0];");
+    try testRuntimeError("Cannot index a float", "return 12.3[-1];");
+    try testRuntimeError("Cannot index a boolean", "return true[0];");
+    try testRuntimeError("Cannot index null", "return null[0];");
+
+    try testRuntimeError("Index must be an integer, got a boolean", "return [][true];");
+    try testRuntimeError("Index must be an integer, got null", "return [][null];");
+    try testRuntimeError("Index must be an integer, got a float", "return [][1.2];");
+    try testRuntimeError("Index must be an integer, got a string", "return [][``];");
+    try testRuntimeError("Index must be an integer, got an array", "return [][[]];");
 }
 
 fn testReturnValue(expected: Value, src: []const u8) !void {
@@ -650,7 +745,12 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
             return err;
         };
 
-        try t.expectEqual(true, expected.equal(value));
+        const is_equal = expected.equal(value) catch false;
+        if (is_equal == false) {
+            disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
+            std.debug.print("{any} != {any}\n", .{expected, value});
+            return error.NotEqual;
+        }
     }
 }
 

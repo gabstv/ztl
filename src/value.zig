@@ -85,6 +85,28 @@ pub const Value = union(enum) {
         }
         return error.Incompatible;
     }
+
+    pub fn friendlyName(self: Value) []const u8 {
+        switch (self) {
+            .i64 => return "integer",
+            .f64 => return "float",
+            .bool => return "boolean",
+            .null => return "null",
+            .string => return "string",
+            .array => return "array",
+        }
+    }
+
+    pub fn friendlyArticleName(self: Value) []const u8 {
+        switch (self) {
+            .i64 => return "an integer",
+            .f64 => return "a float",
+            .bool => return "a boolean",
+            .null => return "null",
+            .string => return "a string",
+            .array => return "an array",
+        }
+    }
 };
 
 const t = @import("t.zig");

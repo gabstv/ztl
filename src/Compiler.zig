@@ -383,10 +383,10 @@ pub fn Compiler(comptime config: Config) type {
 
         fn parsePrecedence(self: *Self, precedence: Precedence) CompileError!void {
             try self.advance();
+            const can_assign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
             {
                 const rule = ParseRule(Self).get(self._previous_token.value);
                 if (rule.prefix) |prefix| {
-                    const can_assign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
                     try prefix(self, can_assign);
                 } else {
                     return self.setExpectationError("an expression");
@@ -400,7 +400,7 @@ pub fn Compiler(comptime config: Config) type {
                     break;
                 }
                 try self.advance();
-                try rule.infix.?(self);
+                try rule.infix.?(self, can_assign);
             }
         }
 
@@ -409,7 +409,7 @@ pub fn Compiler(comptime config: Config) type {
             return self.consume(.RIGHT_PARENTHESIS, "Expected closing parentheses ')'");
         }
 
-        fn binary(self: *Self) CompileError!void {
+        fn binary(self: *Self, _: bool) CompileError!void {
             const previous = self._previous_token.value;
             const rule = ParseRule(Self).get(previous);
             try self.parsePrecedence(@enumFromInt(rule.precedence + 1));
@@ -485,8 +485,7 @@ pub fn Compiler(comptime config: Config) type {
             if (can_assign) {
                 if (try self.match(.EQUAL)) {
                     try self.expression();
-                    try bc.setLocal(@intCast(idx));
-                    return;
+                    return bc.setLocal(@intCast(idx));
                 }
 
                 if (try self.match(.PLUS_EQUAL)) {
@@ -531,14 +530,15 @@ pub fn Compiler(comptime config: Config) type {
                 }
             }
 
-
             if (try self.match(.PLUS_PLUS)) {
-                try bc.incr(@intCast(idx), 1);
-            } else if (try self.match(.MINUS_MINUS)) {
-                try bc.incr(@intCast(idx), 0);
-            } else {
-                try bc.getLocal(@intCast(idx));
+                return bc.incr(@intCast(idx), 1);
             }
+
+            if (try self.match(.MINUS_MINUS)) {
+                return bc.incr(@intCast(idx), 0);
+            }
+
+            return bc.getLocal(@intCast(idx));
         }
 
         fn array(self: *Self, _: bool) CompileError!void {
@@ -556,10 +556,39 @@ pub fn Compiler(comptime config: Config) type {
             try self._byte_code.initializeArray(value_count);
         }
 
-        fn index(self: *Self) CompileError!void {
+        fn index(self: *Self, can_assign: bool) CompileError!void {
             try self.expression();
             try self.consume(.RIGHT_BRACKET, "left bracket (']')");
-            try self._byte_code.op(.INDEX_GET);
+
+            const bc = &self._byte_code;
+            if (can_assign) {
+                if (try self.match(.EQUAL)) {
+                    try self.expression();
+                    return bc.op(.INDEX_SET);
+                }
+
+                if (try self.match(.PLUS_EQUAL)) {
+                    try self.expression();
+                    return bc.op(.INCR_REF);
+                }
+
+                if (try self.match(.MINUS_EQUAL)) {
+                    try self.expression();
+                    return bc.op2(.NEGATE, .INCR_REF);
+                }
+
+                if (try self.match(.PLUS_PLUS)) {
+                    try bc.i64(1);
+                    return bc.op(.INCR_REF);
+                }
+
+                if (try self.match(.MINUS_MINUS)) {
+                    try bc.i64(-1);
+                    return bc.op(.INCR_REF);
+                }
+            }
+
+            try bc.op(.INDEX_GET);
         }
 
         fn call(self: *Self) CompileError!void {
@@ -589,16 +618,7 @@ pub fn Compiler(comptime config: Config) type {
             try self._byte_code.call(gop.value_ptr.data_pos);
         }
 
-        fn newFunction(self: *Self, name: []const u8) CompileError!Function {
-            const data_pos = try self._byte_code.newFunction(name);
-            return .{
-                .arity = null,
-                .code_pos = null,
-                .data_pos = data_pos,
-            };
-        }
-
-        fn @"and"(self: *Self) CompileError!void {
+        fn @"and"(self: *Self, _: bool) CompileError!void {
             const bc = &self._byte_code;
 
             // shortcircuit, the left side is already executed, if it's false, we
@@ -609,7 +629,7 @@ pub fn Compiler(comptime config: Config) type {
             try self.finalizeJump(end_pos);
         }
 
-        fn @"or"(self: *Self) CompileError!void {
+        fn @"or"(self: *Self, _: bool) CompileError!void {
             const bc = &self._byte_code;
 
             // Rather than add a new op (JUMP_IF_TRUE), we can simulate this by
@@ -639,6 +659,15 @@ pub fn Compiler(comptime config: Config) type {
             }
 
             return null;
+        }
+
+        fn newFunction(self: *Self, name: []const u8) CompileError!Function {
+            const data_pos = try self._byte_code.newFunction(name);
+            return .{
+                .arity = null,
+                .code_pos = null,
+                .data_pos = data_pos,
+            };
         }
 
         fn scopeDepth(self: *const Self) usize {
@@ -728,7 +757,7 @@ const Function = struct {
 
 fn ParseRule(comptime C: type) type {
     return struct {
-        infix: ?*const fn (*C) CompileError!void,
+        infix: ?*const fn (*C, bool) CompileError!void,
         prefix: ?*const fn (*C, bool) CompileError!void,
         precedence: i32,
 
