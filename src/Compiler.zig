@@ -240,20 +240,16 @@ pub fn Compiler(comptime config: Config) type {
                     try self.expression();
                     try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
 
-                    const if_jump = try bc.prepareJump(.JUMP_IF_FALSE);
-                    try bc.op(.POP); // pop the if condition (inside the if block)
-
+                    const if_jump = try bc.prepareJump(.JUMP_IF_FALSE_POP);
                     try self.statement();
 
                     if (try self.match(.ELSE)) {
                         const else_jump = try bc.prepareJump(.JUMP);
-                        try bc.op(.POP); // pop the if condition (inside the else block)
                         try self.finalizeJump(if_jump);
                         try self.statement();
                         try self.finalizeJump(else_jump);
                     } else {
                         try self.finalizeJump(if_jump);
-                        try bc.op(.POP); // pop the if condition (when if is false with no else)
                     }
                 },
                 .FOR => {
@@ -281,8 +277,7 @@ pub fn Compiler(comptime config: Config) type {
                         try self.expression();
                         try self.consumeSemicolon();
 
-                        jump_loop = try bc.prepareJump(.JUMP_IF_FALSE);
-                        try bc.op(.POP);
+                        jump_loop = try bc.prepareJump(.JUMP_IF_FALSE_POP);
                     }
 
                     var incr: []const u8 = &.{};
@@ -305,7 +300,6 @@ pub fn Compiler(comptime config: Config) type {
                     if (jump_loop) |jl| {
                         // this is where we exit when the condition is false
                         try self.finalizeJump(jl);
-                        try bc.op(.POP);
                     }
 
                     try self.endScope(false);
@@ -318,15 +312,10 @@ pub fn Compiler(comptime config: Config) type {
                     try self.expression();
                     try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
 
-                    const while_jump = try bc.prepareJump(.JUMP_IF_FALSE);
-                    // pop the result of the condition when it's true
-                    try bc.op(.POP);
+                    const while_jump = try bc.prepareJump(.JUMP_IF_FALSE_POP);
                     try self.statement();
                     try self.jump(loop_start);
                     try self.finalizeJump(while_jump);
-
-                    // pop the result of the condition when it's [finally] false
-                    try bc.op(.POP);
                 },
                 .RETURN => {
                     try self.advance();
@@ -624,7 +613,6 @@ pub fn Compiler(comptime config: Config) type {
             // shortcircuit, the left side is already executed, if it's false, we
             // can skip the rest.
             const end_pos = try bc.prepareJump(.JUMP_IF_FALSE);
-            try bc.op(.POP);
             try self.parsePrecedence(.AND);
             try self.finalizeJump(end_pos);
         }
@@ -642,6 +630,19 @@ pub fn Compiler(comptime config: Config) type {
             const end_pos = try bc.prepareJump(.JUMP);
             try self.finalizeJump(else_pos);
             try bc.op(.POP);
+            try self.parsePrecedence(.OR);
+            try self.finalizeJump(end_pos);
+        }
+
+        fn @"orelse"(self: *Self, _: bool) CompileError!void {
+            const bc = &self._byte_code;
+            try bc.op(.PUSH);
+
+            try bc.@"null"();
+            try bc.op(.EQUAL);
+
+            const end_pos = try bc.prepareJump(.JUMP_IF_FALSE_POP);
+            try bc.op(.POP); // pop off the left hand side (which was false)
             try self.parsePrecedence(.OR);
             try self.finalizeJump(end_pos);
         }
@@ -792,6 +793,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.MINUS, C.binary, C.unary, Precedence.TERM },
             .{ Token.Type.NULL, null, C.null, Precedence.NONE },
             .{ Token.Type.OR, C.@"or", null, Precedence.OR },
+            .{ Token.Type.ORELSE, C.@"orelse", null, Precedence.OR },
             .{ Token.Type.PERCENT, C.binary, null, Precedence.FACTOR },
             .{ Token.Type.PLUS, C.binary, null, Precedence.TERM },
             .{ Token.Type.RETURN, null, null, Precedence.NONE },

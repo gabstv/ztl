@@ -71,6 +71,7 @@ pub fn VM(comptime config: Config) type {
                 ip += 1;
                 switch (op_code) {
                     .POP => _ = stack.pop(),
+                    .PUSH => try stack.append(allocator, stack.getLast()),
                     .CONSTANT_I64 => {
                         const value = @as(i64, @bitCast(ip[0..8].*));
                         try stack.append(allocator, .{ .i64 = value });
@@ -139,7 +140,7 @@ pub fn VM(comptime config: Config) type {
                             ip = ip - @abs(relative);
                         }
                     },
-                    .JUMP_IF_FALSE => {
+                    .JUMP_IF_FALSE, .JUMP_IF_FALSE_POP => {
                         if (stack.items[stack.items.len - 1].isTrue()) {
                             // just skip the jump address
                             ip += 2;
@@ -153,6 +154,10 @@ pub fn VM(comptime config: Config) type {
                             } else {
                                 ip = ip - @abs(relative);
                             }
+                        }
+                        if (op_code == .JUMP_IF_FALSE_POP) {
+                            // pop the condition result (true/false) off the stack
+                            _ = stack.pop();
                         }
                     },
                     .INCR => {

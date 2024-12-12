@@ -11,6 +11,7 @@ const FOR_BIT = @as(u24, @bitCast([3]u8{ 'f', 'o', 'r' }));
 const IF_BIT = @as(u16, @bitCast([2]u8{ 'i', 'f' }));
 const NULL_BIT = @as(u32, @bitCast([4]u8{ 'n', 'u', 'l', 'l' }));
 const OR_BIT = @as(u16, @bitCast([2]u8{ 'o', 'r' }));
+const ORELSE_BIT = @as(u48, @bitCast([6]u8{ 'o', 'r', 'e', 'l', 's', 'e' }));
 const PRINT_BIT = @as(u40, @bitCast([5]u8{ 'p', 'r', 'i', 'n', 't' }));
 const RETURN_BIT = @as(u48, @bitCast([6]u8{ 'r', 'e', 't', 'u', 'r', 'n' }));
 const TRUE_BIT = @as(u32, @bitCast([4]u8{ 't', 'r', 'u', 'e' }));
@@ -352,6 +353,7 @@ pub const Scanner = struct {
             },
             6 => switch (@as(u48, @bitCast(value[0..6].*))) {
                 RETURN_BIT => return self.createSimpleToken("RETURN", value),
+                ORELSE_BIT => return self.createSimpleToken("ORELSE", value),
                 else => {},
             },
             else => {},
@@ -433,6 +435,7 @@ pub const Token = struct {
         MINUS_MINUS,
         NULL,
         OR,
+        ORELSE,
         PERCENT,
         PLUS,
         PLUS_EQUAL,
@@ -481,6 +484,7 @@ pub const Token = struct {
         MINUS_MINUS,
         NULL,
         OR,
+        ORELSE,
         PERCENT,
         PLUS,
         PLUS_EQUAL,

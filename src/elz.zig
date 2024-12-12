@@ -713,6 +713,12 @@ test "elz: invalid type indexing" {
     try testRuntimeError("Index must be an integer, got an array", "return [][[]];");
 }
 
+test "elz: orelse" {
+    try testReturnValue(.{.i64 = 4}, "return 4 orelse 1;");
+    try testReturnValue(.{.i64 = 2}, "return null orelse 2;");
+    try testReturnValue(.{.i64 = 3}, "return null orelse 2+1;");
+}
+
 fn testReturnValue(expected: Value, src: []const u8) !void {
     const configs = [_]Config{
         .{.debug = .full},
@@ -747,7 +753,7 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
 
         const is_equal = expected.equal(value) catch false;
         if (is_equal == false) {
-            disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
+            // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
             std.debug.print("{any} != {any}\n", .{expected, value});
             return error.NotEqual;
         }
@@ -769,7 +775,6 @@ fn testError(expected: []const u8, src: []const u8) !void {
 
     return error.NoError;
 }
-
 
 fn testRuntimeError(expected: []const u8, src: []const u8) !void {
     const config = Preset.small;

@@ -384,7 +384,7 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 try std.fmt.format(writer, " {x:0>4}\n", .{target});
                 i += 2;
             },
-            .JUMP_IF_FALSE => {
+            .JUMP_IF_FALSE, .JUMP_IF_FALSE_POP => {
                 const relative = @as(i16, @bitCast(code[i..i+2][0..2].*));
                 const target: u32 = @intCast(@as(i32, @intCast(i)) + relative);
                 try std.fmt.format(writer, " {x:0>4}\n", .{target});
@@ -454,6 +454,7 @@ pub const OpCode = enum(u8) {
     INITIALIZE_ARRAY,
     JUMP,
     JUMP_IF_FALSE,
+    JUMP_IF_FALSE_POP,
     LESSER,
     MODULUS,
     MULTIPLY,
@@ -461,6 +462,7 @@ pub const OpCode = enum(u8) {
     NOT,
     POP,
     PRINT,
+    PUSH,
     RETURN,
     SET_LOCAL,
     SUBTRACT,
