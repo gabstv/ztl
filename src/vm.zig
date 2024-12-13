@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Value = @import("value.zig").Value;
-const Config = @import("config.zig").Config;
+const config = @import("config.zig");
 const OpCode = @import("byte_code.zig").OpCode;
 const VERSION = @import("byte_code.zig").VERSION;
 
@@ -9,18 +9,19 @@ const Allocator = std.mem.Allocator;
 
 const Stack = std.ArrayListUnmanaged(Value);
 
-pub fn VM(comptime config: Config) type {
+pub fn VM(comptime App: type) type {
+    const MAX_CALL_FRAMES = config.extract(App, "elz_max_call_frames");
     return struct {
         _arena: std.heap.ArenaAllocator,
 
         _stack: Stack = .{},
 
-        _frames: [config.max_call_frames]Frame(config) = undefined,
+        _frames: [MAX_CALL_FRAMES]Frame = undefined,
 
         // execution error
         err: ?Error = null,
 
-        const LocalIndex = config.LocalType();
+        const LocalIndex = config.LocalType(App);
         const SL = @sizeOf(LocalIndex);
 
         const Self = @This();
@@ -532,14 +533,10 @@ pub fn VM(comptime config: Config) type {
     };
 }
 
-fn Frame(comptime config: Config) type {
-    _ = config;
-
-    return struct {
-        ip: [*]const u8,
-        frame_pointer: usize = undefined,
-    };
-}
+const Frame = struct {
+    ip: [*]const u8,
+    frame_pointer: usize = undefined,
+};
 
 pub const Error = struct {
     err: anyerror,

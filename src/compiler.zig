@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
+const config = @import("config.zig");
 const Token = @import("scanner.zig").Token;
-const Config = @import("config.zig").Config;
 const Scanner = @import("scanner.zig").Scanner;
 const Position = @import("scanner.zig").Position;
 const ByteCode = @import("byte_code.zig").ByteCode;
@@ -15,10 +15,12 @@ pub const CompileError = error{
     CompileError,
 };
 
-pub fn Compiler(comptime config: Config) type {
+pub fn Compiler(comptime App: type) type {
+    const MAX_LOCALS = config.extract(App, "elz_max_locals");
+
     return struct {
         // the ByteCode that our compiler is generating
-        _byte_code: ByteCode(config),
+        _byte_code: ByteCode(App),
 
         // Arena for memory that can be discarded after compilation. This arena, and
         // its allocator, are NOT used for anything to do with byte code generation.
@@ -58,7 +60,7 @@ pub fn Compiler(comptime config: Config) type {
                 ._scopes = .{},
                 ._locals = .{},
                 ._functions = .{},
-                ._byte_code = try ByteCode(config).init(aa),
+                ._byte_code = try ByteCode(App).init(aa),
                 ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
                 ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
             };
@@ -194,8 +196,8 @@ pub fn Compiler(comptime config: Config) type {
 
             var locals = &self._locals;
 
-            if (locals.items.len == config.max_locals) {
-                try self.setErrorFmt("Maximum number of local variable ({d}) exceeded", .{config.max_locals});
+            if (locals.items.len == MAX_LOCALS) {
+                try self.setErrorFmt("Maximum number of local variable ({d}) exceeded", .{MAX_LOCALS});
                 return error.CompileError;
             }
 

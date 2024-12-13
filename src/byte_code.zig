@@ -1,31 +1,35 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const Config = @import("config.zig").Config;
+const config = @import("config.zig");
 
 pub const VERSION: u8 = 0;
 
-pub fn ByteCode(comptime config: Config) type {
+pub fn ByteCode(comptime App: type) type {
+    const MAX_CALL_FRAMES = config.extract(App, "elz_max_call_frames");
+    const INITIAL_CODE_SIZE = config.extract(App, "elz_initial_code_size");
+    const INITIAL_DATA_SIZE = config.extract(App, "elz_initial_data_size");
+
     return struct {
         allocator: Allocator,
         // We have a single-pass compiler. But in very simple cases, we'll do
         // something fancy that requires some lookahead. For example, the increment
         // part of a for loop (i.e. for (initial; condition; increment)) will be
         // read into "temp" and then glued to the end of the block.
-        temp: Buffer(config.initial_code_size),
+        temp: Buffer(INITIAL_CODE_SIZE),
 
-        data: Buffer(config.initial_data_size),
+        data: Buffer(INITIAL_DATA_SIZE),
 
         frame_count: usize,
-        frames: [config.max_call_frames]Buffer(config.initial_code_size),
+        frames: [MAX_CALL_FRAMES]Buffer(INITIAL_CODE_SIZE),
 
         // will reference frames[frame_count]
-        frame: *Buffer(config.initial_code_size),
+        frame: *Buffer(INITIAL_CODE_SIZE),
 
         // the full code (basically, merging of all the frames)
-        code: Buffer(config.initial_code_size),
+        code: Buffer(INITIAL_CODE_SIZE),
 
-        const LocalIndex = config.LocalType();
+        const LocalIndex = config.LocalType(App);
         const SL = @sizeOf(LocalIndex);
 
         const Self = @This();
@@ -68,7 +72,7 @@ pub fn ByteCode(comptime config: Config) type {
             self.frame = &self.frames[fc];
             self.frame_count = fc;
 
-            if (comptime config.shouldDebug(.full)) {
+            if (comptime config.shouldDebug(App, .full)) {
                 try self.debug(.FUNCTION_NAME, 1 + @as(u8, @intCast(name.len)));
                 try self.frame.write(self.allocator, &.{@intCast(name.len)});
                 try self.frame.write(self.allocator, name);
@@ -103,7 +107,7 @@ pub fn ByteCode(comptime config: Config) type {
                 0, 0, 0, 0, // position in code
             });
 
-            if (comptime config.shouldDebug(.minimal)) {
+            if (comptime config.shouldDebug(App, .minimal)) {
                 try self.data.write(self.allocator, &.{@intCast(name.len)});
                 try self.data.write(self.allocator, name);
             }
@@ -314,8 +318,8 @@ fn Buffer(comptime initial_size: u32) type {
     };
 }
 
-pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anytype) !void {
-    const LocalIndex = config.LocalType();
+pub fn disassemble(comptime App: type, byte_code: []const u8, writer: anytype) !void {
+    const LocalIndex = config.LocalType(App);
     const SL = @sizeOf(LocalIndex);
 
     var i: usize = 0;
@@ -432,7 +436,7 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 var d = data[header_start + 1 ..];
                 const jump: u32 = @bitCast(d[0..4].*);
                 try std.fmt.format(writer, " {d} {x:0>4}", .{ arity, jump });
-                if (comptime config.shouldDebug(.minimal)) {
+                if (comptime config.shouldDebug(App, .minimal)) {
                     d = d[4..];
                     const name_length = d[0];
                     try std.fmt.format(writer, " ({s})", .{d[1 .. name_length + 1]});
@@ -486,7 +490,7 @@ pub const OpCode = enum(u8) {
 const t = @import("t.zig");
 test "bytecode: write" {
     defer t.reset();
-    var b = try ByteCode(.{}).init(t.arena.allocator());
+    var b = try ByteCode(void).init(t.arena.allocator());
 
     for (0..255) |i| {
         try b.code.write(b.allocator, &[_]u8{@intCast(i)});
@@ -503,7 +507,7 @@ test "bytecode: write" {
 test "bytecode: write + disassemble" {
     defer t.reset();
 
-    var b = try ByteCode(.{}).init(t.arena.allocator());
+    var b = try ByteCode(void).init(t.arena.allocator());
     b.beginScript();
     try b.i64(-388491034);
     try b.f64(12.34567);
@@ -511,7 +515,7 @@ test "bytecode: write + disassemble" {
     try b.bool(false);
     try b.null();
     try b.op(OpCode.RETURN);
-    try expectDisassemble(.{}, b,
+    try expectDisassemble(void, b,
         \\// Version: 0
         \\<main>:
         \\0000 CONSTANT_I64 -388491034
@@ -526,9 +530,11 @@ test "bytecode: write + disassemble" {
 
 test "bytecode: functions debug none" {
     defer t.reset();
-    const config = Config{ .debug = .none };
+    const App = struct {
+        pub const elz_debug = config.DebugMode.none;
+    };
 
-    var b = try ByteCode(config).init(t.arena.allocator());
+    var b = try ByteCode(App).init(t.arena.allocator());
     b.beginScript();
 
     const data_pos = try b.newFunction("sum");
@@ -540,7 +546,7 @@ test "bytecode: functions debug none" {
     try b.call(data_pos);
     try b.op(.RETURN);
 
-    try expectDisassemble(config, b,
+    try expectDisassemble(App, b,
         \\// Version: 0
         \\0000 CONSTANT_F64 44
         \\0009 RETURN
@@ -554,9 +560,11 @@ test "bytecode: functions debug none" {
 
 test "bytecode: functions debug minimal" {
     defer t.reset();
-    const config = Config{ .debug = .minimal };
+    const App = struct {
+        pub const elz_debug = config.DebugMode.minimal;
+    };
 
-    var b = try ByteCode(config).init(t.arena.allocator());
+    var b = try ByteCode(App).init(t.arena.allocator());
     b.beginScript();
 
     const data_pos = try b.newFunction("sum");
@@ -568,7 +576,7 @@ test "bytecode: functions debug minimal" {
     try b.call(data_pos);
     try b.op(.RETURN);
 
-    try expectDisassemble(config, b,
+    try expectDisassemble(App, b,
         \\// Version: 0
         \\0000 CONSTANT_F64 44
         \\0009 RETURN
@@ -582,9 +590,11 @@ test "bytecode: functions debug minimal" {
 
 test "bytecode: functions debug full" {
     defer t.reset();
-    const config = Config{ .debug = .full };
+    const App = struct {
+        pub const elz_debug = config.DebugMode.full;
+    };
 
-    var b = try ByteCode(config).init(t.arena.allocator());
+    var b = try ByteCode(App).init(t.arena.allocator());
     b.beginScript();
 
     const data_pos = try b.newFunction("sum");
@@ -596,7 +606,7 @@ test "bytecode: functions debug full" {
     try b.call(data_pos);
     try b.op(.RETURN);
 
-    try expectDisassemble(config, b,
+    try expectDisassemble(App, b,
         \\// Version: 0
         \\0000 fn sum:
         \\0008 CONSTANT_F64 44
@@ -609,13 +619,13 @@ test "bytecode: functions debug full" {
     );
 }
 
-fn expectDisassemble(comptime config: Config, b: anytype, expected: []const u8) !void {
+fn expectDisassemble(comptime App: type, b: anytype, expected: []const u8) !void {
     var arr = std.ArrayList(u8).init(t.allocator);
     defer arr.deinit();
 
     const byte_code = try b.toBytes(t.allocator);
     defer t.allocator.free(byte_code);
 
-    try disassemble(config, byte_code, arr.writer());
+    try disassemble(App, byte_code, arr.writer());
     try t.expectString(expected, arr.items);
 }

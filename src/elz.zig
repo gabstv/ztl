@@ -2,25 +2,9 @@ const std = @import("std");
 
 pub const VM = @import("vm.zig").VM;
 pub const Value = @import("value.zig").Value;
-pub const Config = @import("config.zig").Config;
+pub const DebugMode = @import("config.zig").DebugMode;
 pub const Compiler = @import("compiler.zig").Compiler;
 pub const disassemble = @import("byte_code.zig").disassemble;
-
-pub const Preset = struct {
-    pub const small = Config{
-        .debug = .none,
-        .max_locals = 256,
-        .initial_code_size = 256,
-        .initial_data_size = 256,
-    };
-
-    pub const debugSmall = Config{
-        .debug = .minimal,
-        .max_locals = 256,
-        .initial_code_size = 256,
-        .initial_data_size = 256,
-    };
-};
 
 const t = @import("t.zig");
 
@@ -30,8 +14,11 @@ test {
 
 test "elz: local limit" {
     blk: {
-        var c = Compiler(.{ .max_locals = 3 }).init(t.allocator) catch unreachable;
+        var c = Compiler(struct {
+            pub const elz_max_locals = 3;
+        }).init(t.allocator) catch unreachable;
         defer c.deinit();
+
         c.compile(
             \\ var a = 1;
             \\ var b = 1;
@@ -45,7 +32,9 @@ test "elz: local limit" {
     }
 
     {
-        var c = Compiler(.{ .max_locals = 3 }).init(t.allocator) catch unreachable;
+        var c = Compiler(struct {
+            pub const elz_max_locals = 3;
+        }).init(t.allocator) catch unreachable;
         defer c.deinit();
         try c.compile(
             \\ var a = 1;
@@ -729,48 +718,56 @@ test "elz: orelse" {
 }
 
 fn testReturnValue(expected: Value, src: []const u8) !void {
-    const configs = [_]Config{
-        .{ .debug = .full },
-        Preset.small,
-        .{ .max_locals = 300 }, // requires u16
+    try testReturnValueWithApp(struct {
+        pub const elz_debug = DebugMode.full;
+    }, expected, src);
+
+    try testReturnValueWithApp(struct {
+        pub const elz_max_locals = 256;
+    }, expected, src);
+
+    try testReturnValueWithApp(struct {
+        pub const elz_max_locals = 300;
+    }, expected, src);
+
+    try testReturnValueWithApp(void, expected, src);
+}
+
+fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) !void {
+    var c = try Compiler(App).init(t.allocator);
+    defer c.deinit();
+
+    c.compile(src) catch |err| {
+        std.debug.print("Compilation error: {}\n", .{c.err.?});
+        return err;
     };
 
-    inline for (configs) |config| {
-        var c = try Compiler(config).init(t.allocator);
-        defer c.deinit();
+    const byte_code = try c.byteCode(t.allocator);
+    defer t.allocator.free(byte_code);
+    // disassemble(App, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
-        c.compile(src) catch |err| {
-            std.debug.print("Compilation error: {}\n", .{c.err.?});
-            return err;
-        };
+    var vm = VM(App).init(t.allocator);
+    defer vm.deinit();
 
-        const byte_code = try c.byteCode(t.allocator);
-        defer t.allocator.free(byte_code);
-        // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
-
-        var vm = VM(config).init(t.allocator);
-        defer vm.deinit();
-
-        const value = vm.run(byte_code) catch |err| {
-            std.debug.print("{any}", .{err});
-            if (vm.err) |e| {
-                std.debug.print("{any} {s}\n", .{ e.err, e.desc });
-            }
-            disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
-            return err;
-        };
-
-        const is_equal = expected.equal(value) catch false;
-        if (is_equal == false) {
-            // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
-            std.debug.print("{any} != {any}\n", .{ expected, value });
-            return error.NotEqual;
+    const value = vm.run(byte_code) catch |err| {
+        std.debug.print("{any}", .{err});
+        if (vm.err) |e| {
+            std.debug.print("{any} {s}\n", .{ e.err, e.desc });
         }
+        disassemble(App, byte_code, std.io.getStdErr().writer()) catch unreachable;
+        return err;
+    };
+
+    const is_equal = expected.equal(value) catch false;
+    if (is_equal == false) {
+        // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
+        std.debug.print("{any} != {any}\n", .{ expected, value });
+        return error.NotEqual;
     }
 }
 
 fn testError(expected: []const u8, src: []const u8) !void {
-    var c = Compiler(Preset.small).init(t.allocator) catch unreachable;
+    var c = Compiler(void).init(t.allocator) catch unreachable;
     defer c.deinit();
 
     c.compile(src) catch {
@@ -786,8 +783,7 @@ fn testError(expected: []const u8, src: []const u8) !void {
 }
 
 fn testRuntimeError(expected: []const u8, src: []const u8) !void {
-    const config = Preset.small;
-    var c = try Compiler(config).init(t.allocator);
+    var c = try Compiler(void).init(t.allocator);
     defer c.deinit();
 
     c.compile(src) catch |err| {
@@ -797,9 +793,9 @@ fn testRuntimeError(expected: []const u8, src: []const u8) !void {
 
     const byte_code = try c.byteCode(t.allocator);
     defer t.allocator.free(byte_code);
-    // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
+    // disassemble({}, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
-    var vm = VM(config).init(t.allocator);
+    var vm = VM(void).init(t.allocator);
     defer vm.deinit();
 
     _ = vm.run(byte_code) catch {

@@ -1,25 +1,33 @@
-pub const Config = struct {
-    debug: DebugMode = .none,
-    max_locals: u16 = 256,
-    max_call_frames: u8 = 255,
-    initial_code_size: u32 = 512,
-    initial_data_size: u32 = 512,
-
-    const DebugMode = enum {
-        none,
-        minimal,
-        full,
-    };
-
-    pub fn shouldDebug(comptime self: Config, level: DebugMode) bool {
-        return @intFromEnum(self.debug) >= @intFromEnum(level);
-    }
-
-    pub fn LocalType(comptime self: Config) type {
-        const ml = self.max_locals;
-        if (ml == 0) @compileError("max_locals must be greater than 0");
-        if (ml <= 256) return u8;
-        if (ml <= 65536) return u16;
-        @compileError("max_locals must be less than 65536");
-    }
+pub const DebugMode = enum {
+    none,
+    minimal,
+    full,
 };
+
+const Defaults = struct {
+    pub const elz_debug: DebugMode = .none;
+    pub const elz_max_locals: u16 = 256;
+    pub const elz_max_call_frames: u8 = 255;
+    pub const elz_initial_code_size: u32 = 512;
+    pub const elz_initial_data_size: u32 = 512;
+};
+
+pub fn extract(comptime App: type, comptime field_name: []const u8) @TypeOf(@field(Defaults, field_name)) {
+    if (App != void and @hasDecl(App, field_name)) {
+        return @field(App, field_name);
+    }
+    return @field(Defaults, field_name);
+}
+
+pub fn shouldDebug(comptime App: type, level: DebugMode) bool {
+    const configured_debug_level = extract(App, "elz_debug");
+    return @intFromEnum(configured_debug_level) >= @intFromEnum(level);
+}
+
+pub fn LocalType(comptime App: type) type {
+    const ml = extract(App, "elz_max_locals");
+    if (ml == 0) @compileError("max_locals must be greater than 0");
+    if (ml <= 256) return u8;
+    if (ml <= 65536) return u16;
+    @compileError("elz_max_locals must be less than 65536");
+}
