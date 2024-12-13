@@ -97,6 +97,11 @@ pub fn VM(comptime config: Config) type {
                     .CONSTANT_NULL => {
                         try stack.append(allocator, .{ .null = {} });
                     },
+                    .CONSTANT_PROPERTY => {
+                        const value = @as(i32, @bitCast(ip[0..4].*));
+                        try stack.append(allocator, .{ .property = value });
+                        ip += 4;
+                    },
                     .GET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
                         try stack.append(allocator, stack.items[frame_pointer + idx]);
@@ -429,29 +434,33 @@ pub fn VM(comptime config: Config) type {
         }
 
         fn getIndexed(self: *Self, target: Value, index: Value) !Value {
+            switch (index) {
+                .i64 => |n| return self.getNumericIndex(target, n),
+                .property => |n| return self.getProperty(target, n),
+                else => return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()}),
+            }
+        }
+
+        fn getNumericIndex(self: *Self, target: Value, index: i64) !Value {
             switch (target) {
-                .array => |arr| {
-                    const len = arr.items.len;
-                    switch (index) {
-                        .i64 => |i| {
-                            const actual_index = try self.resolveScalarIndex(len, i);
-                            return arr.items[actual_index];
-                        },
-                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{index.friendlyArticleName()}),
-                    }
-                },
+                .array => |arr| return arr.items[try self.resolveScalarIndex(arr.items.len, index)],
                 .string => |str| {
-                    const len = str.len;
-                      switch (index) {
-                        .i64 => |i| {
-                            const actual_index = try self.resolveScalarIndex(len, i);
-                            return .{.string = str[actual_index..actual_index+1]};
-                        },
-                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{index.friendlyArticleName()}),
-                    }
+                    const actual_index = try self.resolveScalarIndex(str.len, index);
+                    return .{.string = str[actual_index..actual_index+1]};
                 },
                 else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
             }
+        }
+
+        fn getProperty(self: *Self, target: Value, index: i32) !Value {
+            switch (target) {
+                .array => |arr| switch (index) {
+                    -1 => return .{.i64 = @intCast(arr.items.len)},
+                    else => {},
+                },
+                else => {},
+            }
+            return self.setErrorFmt(error.TypeError, "Unknown property {d} for {s}", .{index, target.friendlyArticleName()});
         }
 
         fn setIndexed(self: *Self, target: Value, index: Value, value: Value) !void {

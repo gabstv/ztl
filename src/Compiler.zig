@@ -7,6 +7,8 @@ const Scanner = @import("scanner.zig").Scanner;
 const Position = @import("scanner.zig").Position;
 const ByteCode = @import("byte_code.zig").ByteCode;
 
+const LEN_BIT = @as(u24, @bitCast([3]u8{ 'l', 'e', 'n' }));
+
 pub const CompileError = error{
     ScanError,
     OutOfMemory,
@@ -577,7 +579,7 @@ pub fn Compiler(comptime config: Config) type {
                 }
             }
 
-            try bc.op(.INDEX_GET);
+            return bc.op(.INDEX_GET);
         }
 
         fn call(self: *Self) CompileError!void {
@@ -605,6 +607,35 @@ pub fn Compiler(comptime config: Config) type {
                 gop.value_ptr.* = try self.newFunction(name);
             }
             try self._byte_code.call(gop.value_ptr.data_pos);
+        }
+
+        fn dot(self: *Self, can_assign: bool) CompileError!void {
+            try self.consume(.IDENTIFIER, "property name");
+            const name = self._previous_token.value.IDENTIFIER;
+
+            var _code: ?i32 = null;
+            switch (name.len) {
+                3 => switch (@as(u24, @bitCast(name[0..3].*))) {
+                    LEN_BIT => _code = -1,
+                    else => {},
+                },
+                else => {},
+            }
+
+            const code = _code orelse {
+                try self.setErrorFmt("'{s}' is not a valid property", .{ name }, null);
+                return error.CompileError;
+            };
+
+            const bc = &self._byte_code;
+            if (can_assign) {
+                // if (try self.match(.EQUAL)) {
+                //     try self.expression();
+                //     return bc.op(.INDEX_SET);
+                // }
+            }
+            try bc.property(code);
+            return bc.op(.INDEX_GET);
         }
 
         fn @"and"(self: *Self, _: bool) CompileError!void {
@@ -774,7 +805,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.BANG_EQUAL, C.binary, null, Precedence.EQUALITY },
             .{ Token.Type.BOOLEAN, null, C.boolean, Precedence.NONE },
             .{ Token.Type.COMMA, null, null, Precedence.NONE },
-            .{ Token.Type.DOT, null, null, Precedence.NONE },
+            .{ Token.Type.DOT, C.dot, null, Precedence.CALL },
             .{ Token.Type.ELSE, null, null, Precedence.NONE },
             .{ Token.Type.EOF, null, null, Precedence.NONE },
             .{ Token.Type.EQUAL, null, null, Precedence.NONE },

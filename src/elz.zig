@@ -685,6 +685,10 @@ test "elz: array assignment" {
     try testRuntimeError("Index out of range. Index: -2, Len: 1", "[1][-2] = 1;");
 }
 
+test "elz: array length" {
+    try testReturnValue(.{.i64 = 0}, "return [].len;");
+}
+
 test "elz: string indexing" {
     try testReturnValue(.{.string = "a"}, "return `abc`[0];");
     try testReturnValue(.{.string = "b"}, "return `abc`[1];");

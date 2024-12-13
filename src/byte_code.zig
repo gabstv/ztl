@@ -211,6 +211,11 @@ pub fn ByteCode(comptime config: Config) type {
             return self.op(OpCode.CONSTANT_NULL);
         }
 
+        pub fn property(self: *Self, value: i32) !void {
+            try self.op(.CONSTANT_PROPERTY);
+            return self.frame.write(self.allocator, std.mem.asBytes(&value));
+        }
+
         pub fn initializeArray(self: *Self, value_count: u32) !void {
             try self.op(.INITIALIZE_ARRAY);
             return self.frame.write(self.allocator, std.mem.asBytes(&value_count));
@@ -378,6 +383,11 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 const string_end = @as(u32, @bitCast(data[header_start..header_end][0..4].*));
                 try std.fmt.format(writer, " {s}\n", .{data[header_end..string_end]});
             },
+            .CONSTANT_PROPERTY => {
+                const value = @as(*align(1) const i32, @ptrCast(code[i..(i + 4)])).*;
+                try std.fmt.format(writer, " {d}\n", .{value});
+                i += 4;
+            },
             .JUMP => {
                 const relative = @as(i16, @bitCast(code[i..i+2][0..2].*));
                 const target: u32 = @intCast(@as(i32, @intCast(i)) + relative);
@@ -442,6 +452,7 @@ pub const OpCode = enum(u8) {
     CONSTANT_F64,
     CONSTANT_I64,
     CONSTANT_NULL,
+    CONSTANT_PROPERTY,
     CONSTANT_STRING,
     DIVIDE,
     EQUAL,

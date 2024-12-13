@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 pub const Value = union(enum) {
     f64: f64,
     i64: i64,
@@ -8,12 +7,13 @@ pub const Value = union(enum) {
     null: void,
     array: List,
     string: []const u8,
+    property: i32,
 
     pub const List = std.ArrayListUnmanaged(Value);
 
     pub fn format(self: Value, _: []const u8, _: anytype, writer: anytype) !void {
         switch (self) {
-            .i64 => |v| return std.fmt.format(writer, "{d}", .{v}),
+            .i64, .property => |v| return std.fmt.format(writer, "{d}", .{v}),
             .string => |v| {
                 try writer.writeByte('"');
                 try writer.writeAll(v);
@@ -81,7 +81,8 @@ pub const Value = union(enum) {
                 },
                 .null => return false,
                 else => {},
-            }
+            },
+            .property => return false,
         }
         return error.Incompatible;
     }
@@ -94,6 +95,7 @@ pub const Value = union(enum) {
             .null => return "null",
             .string => return "string",
             .array => return "array",
+            .property => return "property",
         }
     }
 
@@ -105,6 +107,7 @@ pub const Value = union(enum) {
             .null => return "null",
             .string => return "a string",
             .array => return "an array",
+            .property => return "a property",
         }
     }
 };
