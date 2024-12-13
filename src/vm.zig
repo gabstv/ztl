@@ -45,7 +45,7 @@ pub fn VM(comptime config: Config) type {
             const code_end = 9 + @as(u32, @bitCast(ip[1..5].*));
 
             if (code_end == 9) {
-                return .{.null = {}};
+                return .{ .null = {} };
             }
 
             const code = byte_code[9..code_end];
@@ -150,8 +150,8 @@ pub fn VM(comptime config: Config) type {
                             // just skip the jump address
                             ip += 2;
                         } else {
-                           const relative: i16 = @bitCast(ip[0..2].*);
-                           std.debug.assert(@abs(relative) <= code.len);
+                            const relative: i16 = @bitCast(ip[0..2].*);
+                            std.debug.assert(@abs(relative) <= code.len);
 
                             // really??
                             if (relative >= 0) {
@@ -173,7 +173,7 @@ pub fn VM(comptime config: Config) type {
                         ip += SL;
 
                         const adjusted_idx = frame_pointer + idx;
-                        const v = try self.add(stack.items[adjusted_idx], .{.i64 = incr});
+                        const v = try self.add(stack.items[adjusted_idx], .{ .i64 = incr });
                         try stack.append(allocator, v);
                         stack.items[adjusted_idx] = v;
                     },
@@ -181,7 +181,7 @@ pub fn VM(comptime config: Config) type {
                         const value_count: u32 = @bitCast(ip[0..4].*);
                         ip += 4;
                         if (value_count == 0) {
-                            try stack.append(allocator, .{.array = .{}});
+                            try stack.append(allocator, .{ .array = .{} });
                         } else {
                             std.debug.assert(stack.items.len >= value_count);
 
@@ -189,13 +189,13 @@ pub fn VM(comptime config: Config) type {
                             try arr.ensureTotalCapacity(allocator, value_count);
 
                             var items = stack.items;
-                            for (items[items.len - value_count..]) |v| {
+                            for (items[items.len - value_count ..]) |v| {
                                 arr.appendAssumeCapacity(v);
                             }
                             stack.items.len -= value_count;
                             // we popped at least 1 value off the stack, there
                             // has to be space for our array
-                            stack.appendAssumeCapacity(.{.array = arr});
+                            stack.appendAssumeCapacity(.{ .array = arr });
                         }
                     },
                     .INDEX_GET => {
@@ -238,7 +238,7 @@ pub fn VM(comptime config: Config) type {
                         const data_start = @as(u32, @bitCast(ip[0..4].*));
                         ip += 4;
 
-                        const meta = data[data_start..data_start + 5];
+                        const meta = data[data_start .. data_start + 5];
 
                         const arity = meta[0];
                         const code_pos = @as(u32, @bitCast(meta[1..5][0..4].*));
@@ -280,7 +280,7 @@ pub fn VM(comptime config: Config) type {
                         // prefix (including the lenght prefix itself) to make
                         // it quick for the VM to skip.
                         ip += @as(u16, @bitCast(ip[0..2].*));
-                    }
+                    },
                 }
             }
         }
@@ -381,14 +381,14 @@ pub fn VM(comptime config: Config) type {
 
             const left_index = right_index - 1;
             const result = try operation(self, values[left_index], values[right_index]);
-            values[left_index] = .{.bool = result};
+            values[left_index] = .{ .bool = result };
             stack.items.len = right_index;
         }
 
         fn equal(self: *Self, left: Value, right: Value) anyerror!bool {
-           return left.equal(right) catch {
+            return left.equal(right) catch {
                 return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} == {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
-           };
+            };
         }
 
         fn greater(self: *Self, left: Value, right: Value) anyerror!bool {
@@ -446,7 +446,7 @@ pub fn VM(comptime config: Config) type {
                 .array => |arr| return arr.items[try self.resolveScalarIndex(arr.items.len, index)],
                 .string => |str| {
                     const actual_index = try self.resolveScalarIndex(str.len, index);
-                    return .{.string = str[actual_index..actual_index+1]};
+                    return .{ .string = str[actual_index .. actual_index + 1] };
                 },
                 else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
             }
@@ -455,12 +455,12 @@ pub fn VM(comptime config: Config) type {
         fn getProperty(self: *Self, target: Value, index: i32) !Value {
             switch (target) {
                 .array => |arr| switch (index) {
-                    -1 => return .{.i64 = @intCast(arr.items.len)},
+                    -1 => return .{ .i64 = @intCast(arr.items.len) },
                     else => {},
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Unknown property {d} for {s}", .{index, target.friendlyArticleName()});
+            return self.setErrorFmt(error.TypeError, "Unknown property {d} for {s}", .{ index, target.friendlyArticleName() });
         }
 
         fn setIndexed(self: *Self, target: Value, index: Value, value: Value) !void {
@@ -501,7 +501,7 @@ pub fn VM(comptime config: Config) type {
         fn resolveScalarIndex(self: *Self, len: usize, index: i64) !usize {
             if (index >= 0) {
                 if (index >= len) {
-                    return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{index, len});
+                    return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{ index, len });
                 }
                 return @intCast(index);
             }
@@ -509,7 +509,7 @@ pub fn VM(comptime config: Config) type {
             // index is negative
             const abs_index = @as(i64, @intCast(len)) + index;
             if (abs_index < 0) {
-                return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{index, len});
+                return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{ index, len });
             }
             return @intCast(abs_index);
         }

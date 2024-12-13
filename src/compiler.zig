@@ -90,7 +90,7 @@ pub fn Compiler(comptime config: Config) type {
             self._previous_token = self._current_token;
             self._current_token = self._scanner.next() catch |err| {
                 if (self._scanner.err) |se| {
-                    self.setError(se, null);
+                    self.setError(se);
                     return error.ScanError;
                 }
                 return err;
@@ -139,7 +139,7 @@ pub fn Compiler(comptime config: Config) type {
                         while (true) {
                             arity += 1;
                             if (arity > 255) {
-                                try self.setErrorFmt("Function '{s}' has more than 255 parameters", .{name}, null);
+                                try self.setErrorFmt("Function '{s}' has more than 255 parameters", .{name});
                                 return error.CompileError;
                             }
 
@@ -166,7 +166,7 @@ pub fn Compiler(comptime config: Config) type {
                     var gop = try self._functions.getOrPut(self._arena, name);
                     if (gop.found_existing) {
                         if (gop.value_ptr.code_pos != null) {
-                            try self.setErrorFmt("Function '{s}' already declared", .{name}, null);
+                            try self.setErrorFmt("Function '{s}' already declared", .{name});
                             return error.CompileError;
                         }
                     } else {
@@ -176,7 +176,7 @@ pub fn Compiler(comptime config: Config) type {
                     try bc.beginFunction(name);
                     try self.block();
                     if (self.currentScope().has_return == false) {
-                        try bc.@"null"();
+                        try bc.null();
                         try bc.op(.RETURN);
                     }
                     try self.endScope(true);
@@ -195,7 +195,7 @@ pub fn Compiler(comptime config: Config) type {
             var locals = &self._locals;
 
             if (locals.items.len == config.max_locals) {
-                try self.setErrorFmt("Maximum number of local variable ({d}) exceeded", .{config.max_locals}, null);
+                try self.setErrorFmt("Maximum number of local variable ({d}) exceeded", .{config.max_locals});
                 return error.CompileError;
             }
 
@@ -204,7 +204,7 @@ pub fn Compiler(comptime config: Config) type {
 
             if (self.localVariableIndex(name)) |idx| {
                 if (locals.items[idx].depth == scope_depth) {
-                    try self.setErrorFmt("Variable '{s}' already declared", .{name}, null);
+                    try self.setErrorFmt("Variable '{s}' already declared", .{name});
                     return error.CompileError;
                 }
             }
@@ -225,7 +225,7 @@ pub fn Compiler(comptime config: Config) type {
         fn statement(self: *Self) CompileError!void {
             const scope = self.currentScope();
             if (scope.has_return) {
-                self.setError("Unreachable code detected", null);
+                self.setError("Unreachable code detected");
                 return error.CompileError;
             }
             var bc = &self._byte_code;
@@ -305,7 +305,6 @@ pub fn Compiler(comptime config: Config) type {
                     }
 
                     try self.endScope(false);
-
                 },
                 .WHILE => {
                     try self.advance();
@@ -344,16 +343,16 @@ pub fn Compiler(comptime config: Config) type {
             }
         }
 
-        fn jump(self: *Self, pos: u32) !void  {
+        fn jump(self: *Self, pos: u32) !void {
             self._byte_code.jump(pos) catch {
-                self.setError("Jump size exceeded maximum allowed value", null);
+                self.setError("Jump size exceeded maximum allowed value");
                 return error.CompileError;
             };
         }
 
-        fn finalizeJump(self: *Self, pos: u32) !void  {
+        fn finalizeJump(self: *Self, pos: u32) !void {
             self._byte_code.finalizeJump(pos) catch {
-                self.setError("Jump size exceeded maximum allowed value", null);
+                self.setError("Jump size exceeded maximum allowed value");
                 return error.CompileError;
             };
         }
@@ -463,12 +462,12 @@ pub fn Compiler(comptime config: Config) type {
             const name = self._previous_token.value.IDENTIFIER;
 
             const idx = self.localVariableIndex(name) orelse {
-                try self.setErrorFmt("Variable '{s}' is unknown", .{name}, null);
+                try self.setErrorFmt("Variable '{s}' is unknown", .{name});
                 return error.CompileError;
             };
 
             if (self._locals.items[idx].depth == null) {
-                try self.setErrorFmt("Variable '{s}' used before being initialized", .{name}, null);
+                try self.setErrorFmt("Variable '{s}' used before being initialized", .{name});
                 return error.CompileError;
             }
 
@@ -590,8 +589,7 @@ pub fn Compiler(comptime config: Config) type {
             var arity: u16 = 0;
             if (try self.match(.RIGHT_PARENTHESIS) == false) {
                 while (true) {
-                    if (try self.match(.RIGHT_PARENTHESIS)) {
-                    }
+                    if (try self.match(.RIGHT_PARENTHESIS)) {}
                     arity += 1;
                     try self.expression();
                     if (try self.match(.RIGHT_PARENTHESIS)) {
@@ -623,7 +621,7 @@ pub fn Compiler(comptime config: Config) type {
             }
 
             const code = _code orelse {
-                try self.setErrorFmt("'{s}' is not a valid property", .{ name }, null);
+                try self.setErrorFmt("'{s}' is not a valid property", .{name});
                 return error.CompileError;
             };
 
@@ -669,7 +667,7 @@ pub fn Compiler(comptime config: Config) type {
             const bc = &self._byte_code;
             try bc.op(.PUSH);
 
-            try bc.@"null"();
+            try bc.null();
             try bc.op(.EQUAL);
 
             const end_pos = try bc.prepareJump(.JUMP_IF_FALSE_POP);
@@ -711,7 +709,7 @@ pub fn Compiler(comptime config: Config) type {
         }
 
         fn beginScope(self: *Self, inherit_locals: bool) !void {
-            try self._scopes.append(self._arena , .{
+            try self._scopes.append(self._arena, .{
                 .has_return = false,
                 .local_start = if (inherit_locals) self.currentScope().local_start else self._locals.items.len,
             });
@@ -744,19 +742,19 @@ pub fn Compiler(comptime config: Config) type {
 
         pub fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {
             const current_token = self._current_token;
-            try self.setErrorFmt("Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) }, null);
+            try self.setErrorFmt("Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) });
             return error.CompileError;
         }
 
-        pub fn setErrorFmt(self: *Self, comptime fmt: []const u8, args: anytype, position: ?Position) !void {
+        pub fn setErrorFmt(self: *Self, comptime fmt: []const u8, args: anytype) !void {
             const desc = try std.fmt.allocPrint(self._arena, fmt, args);
-            return self.setError(desc, position);
+            return self.setError(desc);
         }
 
-        pub fn setError(self: *Self, desc: []const u8, position: ?Position) void {
+        pub fn setError(self: *Self, desc: []const u8) void {
             self.err = .{
                 .desc = desc,
-                .position = position orelse self._scanner.position(null),
+                .position = .{}, // TODO
             };
         }
 

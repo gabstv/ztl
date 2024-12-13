@@ -19,7 +19,7 @@ const VAR_BIT = @as(u24, @bitCast([3]u8{ 'v', 'a', 'r' }));
 const VOID_BIT = @as(u32, @bitCast([4]u8{ 'v', 'o', 'i', 'd' }));
 const WHILE_BIT = @as(u40, @bitCast([5]u8{ 'w', 'h', 'i', 'l', 'e' }));
 
-const ScanError = error {
+const ScanError = error{
     ScanError,
     OutOfMemory,
 };
@@ -45,7 +45,7 @@ pub const Scanner = struct {
 
     err: ?[]const u8 = null,
 
-    // arena is an ArenaAllocator managed by the Compile
+    // arena is an ArenaAllocator managed by the caller
     pub fn init(arena: Allocator, src: []const u8) Scanner {
         return .{
             .src = src,
@@ -170,7 +170,7 @@ pub const Scanner = struct {
                 else => {
                     try self.setErrorFmt("Unexpected character: '{c}'", .{b});
                     return error.ScanError;
-                }
+                },
             }
         }
 
@@ -194,7 +194,7 @@ pub const Scanner = struct {
     // TODO: optimize unescaping (maybe keep an array of N escape index so that
     // we can quickly copy inbetween without re-checking for \ again)
     // scanner_pos points to the first byte after the opening quote
-    fn string(self: *Scanner, scanner_pos: *u32) error{ScanError, OutOfMemory}!Token {
+    fn string(self: *Scanner, scanner_pos: *u32) error{ ScanError, OutOfMemory }!Token {
         var pos = scanner_pos.*;
 
         const start = pos;
@@ -265,7 +265,7 @@ pub const Scanner = struct {
     }
 
     // scanner_pos points to the first byte after whatever byte triggered this
-    fn number(self: *Scanner, scanner_pos: *u32) error{ScanError, OutOfMemory}!Token {
+    fn number(self: *Scanner, scanner_pos: *u32) error{ ScanError, OutOfMemory }!Token {
         var pos = scanner_pos.*;
         const src = self.src;
 
@@ -302,11 +302,7 @@ pub const Scanner = struct {
             return error.ScanError;
         };
 
-        return .{
-            .src = buf,
-            .value = .{ .INTEGER = value },
-            .position = self.position(start)
-        };
+        return .{ .src = buf, .value = .{ .INTEGER = value }, .position = self.position(start) };
     }
 
     // scanner_pos points to the first byte after whatever byte triggered this
@@ -507,16 +503,16 @@ pub const Token = struct {
 
 pub const Position = struct {
     // the byte in src this token starts at
-    pos: u32,
+    pos: u32 = 0,
 
     // the line this token is on (1-based)
-    line: u32,
+    line: u32 = 0,
 
     // the byte in src of the line this token is on, the actual token position on
     // the line is at pos - line_start
-    line_start: u32,
+    line_start: u32 = 0,
 
-    pub const ZERO = Position{ .pos = 0, .line = 0, .line_start = 0 };
+    pub const ZERO: Position = .{};
 };
 
 const t = @import("t.zig");
@@ -673,7 +669,7 @@ test "scanner: misc" {
 }
 
 test "scanner: errors" {
-    try expectError("~", "Unexpected character: '~'" );
+    try expectError("~", "Unexpected character: '~'");
 }
 
 fn expectTokens(src: []const u8, expected: []const Token.Value) !void {

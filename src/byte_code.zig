@@ -32,9 +32,9 @@ pub fn ByteCode(comptime config: Config) type {
 
         pub fn init(allocator: Allocator) !Self {
             return .{
-                .temp = .{ },
-                .data = .{ },
-                .code = .{ },
+                .temp = .{},
+                .data = .{},
+                .code = .{},
                 .frame = undefined,
                 .frames = undefined,
                 .frame_count = 0,
@@ -84,7 +84,7 @@ pub fn ByteCode(comptime config: Config) type {
 
             // fill in the frame's data header (the arity and the position in code)
             self.data.buf[data_pos] = arity;
-            @memcpy(self.data.buf[data_pos + 1..data_pos + 5], std.mem.asBytes(&code_pos));
+            @memcpy(self.data.buf[data_pos + 1 .. data_pos + 5], std.mem.asBytes(&code_pos));
 
             const frame_count = self.frame_count - 1;
             self.frame_count = frame_count;
@@ -152,7 +152,7 @@ pub fn ByteCode(comptime config: Config) type {
         pub fn prepareJump(self: *Self, op_code: OpCode) !u32 {
             try self.op(op_code);
             // create placeholder for jump address (which finalizeJump will fill)
-            try self.frame.write(self.allocator, &.{0, 0});
+            try self.frame.write(self.allocator, &.{ 0, 0 });
             return @intCast(self.frame.pos);
         }
 
@@ -170,7 +170,7 @@ pub fn ByteCode(comptime config: Config) type {
             }
 
             const relative_i16: i16 = @intCast(relative);
-            @memcpy(self.frame.buf[jump_pos - 2..jump_pos], std.mem.asBytes(&relative_i16));
+            @memcpy(self.frame.buf[jump_pos - 2 .. jump_pos], std.mem.asBytes(&relative_i16));
         }
 
         pub fn call(self: *Self, data_pos: u32) !void {
@@ -268,7 +268,7 @@ pub fn ByteCode(comptime config: Config) type {
             const code_end = 9 + self.code.pos;
             @memcpy(buf[9..code_end], code.buf[0..code.pos]);
 
-            const script_end =  code_end + script.pos;
+            const script_end = code_end + script.pos;
             @memcpy(buf[code_end..script_end], script.buf[0..script.pos]);
             @memcpy(buf[script_end..], data.buf[0..data.pos]);
 
@@ -323,8 +323,8 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
     const script_start = @as(u32, @bitCast(byte_code[5..9].*));
 
     const code = byte_code[9 .. code_length + 9];
-    const data = byte_code[9 + code_length..];
-    try std.fmt.format(writer, "// Version: {d}\n", .{ byte_code[0] });
+    const data = byte_code[9 + code_length ..];
+    try std.fmt.format(writer, "// Version: {d}\n", .{byte_code[0]});
 
     while (i < code.len) {
         if (i == script_start) {
@@ -357,9 +357,9 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                         }
                         const function_name_len = code[i];
                         i += 1;
-                        try std.fmt.format(writer, "{x:0>4} fn {s}:\n", .{op_code_pos, code[i..i+function_name_len] });
+                        try std.fmt.format(writer, "{x:0>4} fn {s}:\n", .{ op_code_pos, code[i .. i + function_name_len] });
                         i += function_name_len;
-                    }
+                    },
                 }
             },
             .CONSTANT_I64 => {
@@ -377,7 +377,7 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 i += 1;
             },
             .CONSTANT_STRING => {
-                const header_start = @as(u32, @bitCast(code[i..i+4][0..4].*));
+                const header_start = @as(u32, @bitCast(code[i .. i + 4][0..4].*));
                 i += 4;
                 const header_end = header_start + 4;
                 const string_end = @as(u32, @bitCast(data[header_start..header_end][0..4].*));
@@ -389,24 +389,24 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 i += 4;
             },
             .JUMP => {
-                const relative = @as(i16, @bitCast(code[i..i+2][0..2].*));
+                const relative = @as(i16, @bitCast(code[i .. i + 2][0..2].*));
                 const target: u32 = @intCast(@as(i32, @intCast(i)) + relative);
                 try std.fmt.format(writer, " {x:0>4}\n", .{target});
                 i += 2;
             },
             .JUMP_IF_FALSE, .JUMP_IF_FALSE_POP => {
-                const relative = @as(i16, @bitCast(code[i..i+2][0..2].*));
+                const relative = @as(i16, @bitCast(code[i .. i + 2][0..2].*));
                 const target: u32 = @intCast(@as(i32, @intCast(i)) + relative);
                 try std.fmt.format(writer, " {x:0>4}\n", .{target});
                 i += 2;
             },
             .SET_LOCAL => {
-                const idx = @as(LocalIndex, @bitCast(code[i..i+SL][0..SL].*));
+                const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
                 try std.fmt.format(writer, " @{d}\n", .{idx});
                 i += SL;
             },
             .GET_LOCAL => {
-                const idx = @as(LocalIndex, @bitCast(code[i..i+SL][0..SL].*));
+                const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
                 try std.fmt.format(writer, " @{d}\n", .{idx});
                 i += SL;
             },
@@ -415,27 +415,27 @@ pub fn disassemble(comptime config: Config, byte_code: []const u8, writer: anyty
                 // common (i.e. i--)
                 const value: i16 = if (code[i] == 0) -1 else code[i];
                 i += 1;
-                const idx = @as(LocalIndex, @bitCast(code[i..i+SL][0..SL].*));
+                const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
                 i += SL;
-                try std.fmt.format(writer, " @{d} {d}\n", .{idx, value});
+                try std.fmt.format(writer, " @{d} {d}\n", .{ idx, value });
             },
             .INITIALIZE_ARRAY => {
-                const value_count: u32 = @bitCast(code[i..i+4][0..4].*);
+                const value_count: u32 = @bitCast(code[i .. i + 4][0..4].*);
                 try std.fmt.format(writer, " {d}\n", .{value_count});
                 i += 4;
             },
             .CALL => {
-                const header_start = @as(u32, @bitCast(code[i..i+4][0..4].*));
+                const header_start = @as(u32, @bitCast(code[i .. i + 4][0..4].*));
                 i += 4;
 
                 const arity = data[header_start];
                 var d = data[header_start + 1 ..];
                 const jump: u32 = @bitCast(d[0..4].*);
-                try std.fmt.format(writer, " {d} {x:0>4}", .{arity, jump});
+                try std.fmt.format(writer, " {d} {x:0>4}", .{ arity, jump });
                 if (comptime config.shouldDebug(.minimal)) {
                     d = d[4..];
                     const name_length = d[0];
-                    try std.fmt.format(writer, " ({s})", .{d[1..name_length + 1]});
+                    try std.fmt.format(writer, " ({s})", .{d[1 .. name_length + 1]});
                 }
                 try std.fmt.format(writer, "\n", .{});
             },
@@ -526,7 +526,7 @@ test "bytecode: write + disassemble" {
 
 test "bytecode: functions debug none" {
     defer t.reset();
-    const config = Config{.debug = .none};
+    const config = Config{ .debug = .none };
 
     var b = try ByteCode(config).init(t.arena.allocator());
     b.beginScript();
@@ -554,7 +554,7 @@ test "bytecode: functions debug none" {
 
 test "bytecode: functions debug minimal" {
     defer t.reset();
-    const config = Config{.debug = .minimal};
+    const config = Config{ .debug = .minimal };
 
     var b = try ByteCode(config).init(t.arena.allocator());
     b.beginScript();
@@ -582,7 +582,7 @@ test "bytecode: functions debug minimal" {
 
 test "bytecode: functions debug full" {
     defer t.reset();
-    const config = Config{.debug = .full};
+    const config = Config{ .debug = .full };
 
     var b = try ByteCode(config).init(t.arena.allocator());
     b.beginScript();
