@@ -472,7 +472,7 @@ pub fn VM(comptime config: Config) type {
                             const actual_index = try self.resolveScalarIndex(len, i);
                             arr.items[actual_index] = value;
                         },
-                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{index.friendlyArticleName()}),
+                        else => return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()}),
                     }
                 },
                 else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
@@ -491,7 +491,7 @@ pub fn VM(comptime config: Config) type {
                             arr.items[actual_index] = result;
                             return result;
                         },
-                        else => return self.setErrorFmt(error.TypeError, "Index must be an integer, got {s}", .{index.friendlyArticleName()}),
+                        else => return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()}),
                     }
                 },
                 else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),

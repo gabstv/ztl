@@ -710,11 +710,11 @@ test "elz: invalid type indexing" {
     try testRuntimeError("Cannot index a boolean", "return true[0];");
     try testRuntimeError("Cannot index null", "return null[0];");
 
-    try testRuntimeError("Index must be an integer, got a boolean", "return [][true];");
-    try testRuntimeError("Index must be an integer, got null", "return [][null];");
-    try testRuntimeError("Index must be an integer, got a float", "return [][1.2];");
-    try testRuntimeError("Index must be an integer, got a string", "return [][``];");
-    try testRuntimeError("Index must be an integer, got an array", "return [][[]];");
+    try testRuntimeError("Invalid index or property type, got a boolean", "return [][true];");
+    try testRuntimeError("Invalid index or property type, got null", "return [][null];");
+    try testRuntimeError("Invalid index or property type, got a float", "return [][1.2];");
+    try testRuntimeError("Invalid index or property type, got a string", "return [][``];");
+    try testRuntimeError("Invalid index or property type, got an array", "return [][[]];");
 }
 
 test "elz: orelse" {
