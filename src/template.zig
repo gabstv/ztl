@@ -393,6 +393,10 @@ test "Template: for loop" {
     , .{.products = [_]i64{10, 22, 33}});
 }
 
+test "Template: errors in template" {
+    try testTemplateError("Missing expected end tag, '%>'", "<%=");
+}
+
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
     var tmpl = Template(void).init(t.allocator);
     defer tmpl.deinit();
@@ -421,6 +425,15 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
     try t.expectString(expected, buf.items);
 }
 
+fn testTemplateError(expected: []const u8, template: []const u8) !void {
+    var tmpl = Template(void).init(t.allocator);
+    defer tmpl.deinit();
+    tmpl.compile(template) catch {
+        try t.expectString(expected, tmpl.err.?.desc);
+        return;
+    };
+    return error.NoError;
+}
 
 // Surprisingly [to me] this is the dirtiest part of the codebase. Our goal is
 // to take a template, say:

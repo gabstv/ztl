@@ -106,7 +106,7 @@ pub const Value = union(enum) {
 
     pub fn format(self: Value, _: []const u8, _: anytype, writer: anytype) !void {
         switch (self) {
-            .i64, .property => |v| return std.fmt.format(writer, "{d}", .{v}),
+            .i64, .property => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
             .string => |v| try writer.writeAll(v),
             .bool => |v| return writer.writeAll(if (v) "true" else "false"),
             .f64 => |v| return std.fmt.format(writer, "{d}", .{v}),
