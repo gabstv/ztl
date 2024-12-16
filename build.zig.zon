@@ -1,5 +1,5 @@
 .{
-	.name = "elz",
+	.name = "zt",
 	.paths = .{""},
 	.version = "0.0.0",
 	.dependencies = .{

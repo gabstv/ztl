@@ -1,10 +1,14 @@
 const std = @import("std");
+const zt = @import("zt.zig");
 
 const Allocator = std.mem.Allocator;
+
+const Error = zt.Error;
+const Position = zt.Position;
+
 const config = @import("config.zig");
 const Token = @import("scanner.zig").Token;
 const Scanner = @import("scanner.zig").Scanner;
-const Position = @import("scanner.zig").Position;
 const ByteCode = @import("byte_code.zig").ByteCode;
 
 const LEN_BIT = @as(u24, @bitCast([3]u8{ 'l', 'e', 'n' }));
@@ -15,8 +19,12 @@ pub const CompileError = error{
     CompileError,
 };
 
+const CompileOpts = struct {
+    force_locals:  []const []const u8 = &.{},
+};
+
 pub fn Compiler(comptime App: type) type {
-    const MAX_LOCALS = config.extract(App, "elz_max_locals");
+    const MAX_LOCALS = config.extract(App, "zt_max_locals");
 
     return struct {
         // the ByteCode that our compiler is generating
@@ -52,15 +60,16 @@ pub fn Compiler(comptime App: type) type {
 
             arena.* = std.heap.ArenaAllocator.init(allocator);
             errdefer arena.deinit();
+            return initWithArena(arena.allocator());
+        }
 
-            const aa = arena.allocator();
-
+        pub fn initWithArena(allocator: Allocator) !Self {
             return .{
-                ._arena = aa,
                 ._scopes = .{},
                 ._locals = .{},
                 ._functions = .{},
-                ._byte_code = try ByteCode(App).init(aa),
+                ._arena = allocator,
+                ._byte_code = try ByteCode(App).init(allocator),
                 ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
                 ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
             };
@@ -72,13 +81,22 @@ pub fn Compiler(comptime App: type) type {
             arena.child_allocator.destroy(arena);
         }
 
-        pub fn compile(self: *Self, src: []const u8) CompileError!void {
+        pub fn compile(self: *Self, src: []const u8, opts: CompileOpts) CompileError!void {
             self._scanner = Scanner.init(self._arena, src);
 
             try self.advance();
 
             self._byte_code.beginScript();
             try self.beginScope(false);
+
+            // see template.zig's hack around globals to understand what this is
+            for (opts.force_locals) |name| {
+                try self._locals.append(self._arena, .{
+                    .depth = 0,
+                    .name = name,
+                });
+            }
+
             while (try self.match(.EOF) == false) {
                 try self.declaration();
             }
@@ -237,6 +255,12 @@ pub fn Compiler(comptime App: type) type {
                     try self.beginScope(true);
                     try self.block();
                     try self.endScope(false);
+                },
+                .DOLLAR => {
+                    try self.advance();
+                    try self.expression();
+                    try self.consume(.SEMICOLON, "semicolon (';')");
+                    try self._byte_code.op(.OUTPUT);
                 },
                 .IF => {
                     try self.advance();
@@ -880,15 +904,6 @@ fn maxRuleIndex(comptime E: type) usize {
     }
     return max + 1;
 }
-
-pub const Error = struct {
-    desc: []const u8,
-    position: Position,
-
-    pub fn format(self: Error, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("{s}", .{self.desc});
-    }
-};
 
 const Scope = struct {
     has_return: bool,

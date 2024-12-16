@@ -1,7 +1,9 @@
 const std = @import("std");
-const c = @import("compiler.zig");
+const zt = @import("zt.zig");
 
 const Allocator = std.mem.Allocator;
+
+const Position = zt.Position;
 
 const AND_BIT = @as(u24, @bitCast([3]u8{ 'a', 'n', 'd' }));
 const ELSE_BIT = @as(u32, @bitCast([4]u8{ 'e', 'l', 's', 'e' }));
@@ -54,6 +56,15 @@ pub const Scanner = struct {
         };
     }
 
+    pub fn reset(self: *Scanner, src: []const u8) void {
+        self.src = src;
+        self.pos = 0;
+        self.line = 0;
+        self.err = null;
+        self.line_start = 0;
+        self.scratch.clearRetainingCapacity();
+    }
+
     pub fn next(self: *Scanner) ScanError!Token {
         var pos = self.pos;
         const src = self.src;
@@ -72,7 +83,14 @@ pub const Scanner = struct {
                 ')' => return self.createSimpleToken("RIGHT_PARENTHESIS", ")"),
                 ',' => return self.createSimpleToken("COMMA", ","),
                 '.' => return self.createSimpleToken("DOT", "."),
-                '%' => return self.createSimpleToken("PERCENT", "%"),
+                '$' => return self.createSimpleToken("DOLLAR", "$"),
+                '%' => {
+                    if (self.at(pos) == '{') {
+                        pos += 1;
+                        return self.createSimpleToken("PERCENT_BRACE", "%{");
+                    }
+                    return self.createSimpleToken("PERCENT", "%");
+                },
                 '+' => {
                     if (self.at(pos) == '+') {
                         pos += 1;
@@ -161,7 +179,7 @@ pub const Scanner = struct {
                     self.line += 1;
                     self.line_start = pos;
                 },
-                'a'...'z', 'A'...'Z', '_' => {
+                'a'...'z', 'A'...'Z', '_', '@' => {
                     if (try self.identifier(&pos)) |token| {
                         return token;
                     }
@@ -183,6 +201,18 @@ pub const Scanner = struct {
                 .line_start = self.line_start,
             },
         };
+    }
+
+    pub fn peek(self: *Scanner, needles: []const Token.Type) bool {
+        const pos = self.pos;
+        defer self.pos = pos;
+        for (needles) |n| {
+            const token = self.next() catch return false;
+            if (token.value != n) {
+                return false;
+            }
+        }
+        return true;
     }
 
     fn at(self: *Scanner, pos: usize) u8 {
@@ -408,6 +438,7 @@ pub const Token = struct {
         BANG_EQUAL,
         BOOLEAN: bool,
         COMMA,
+        DOLLAR,
         DOT,
         ELSE,
         EOF,
@@ -433,6 +464,7 @@ pub const Token = struct {
         OR,
         ORELSE,
         PERCENT,
+        PERCENT_BRACE,
         PLUS,
         PLUS_EQUAL,
         PLUS_PLUS,
@@ -457,6 +489,7 @@ pub const Token = struct {
         BANG_EQUAL,
         BOOLEAN,
         COMMA,
+        DOLLAR,
         DOT,
         ELSE,
         EOF,
@@ -482,6 +515,7 @@ pub const Token = struct {
         OR,
         ORELSE,
         PERCENT,
+        PERCENT_BRACE,
         PLUS,
         PLUS_EQUAL,
         PLUS_PLUS,
@@ -499,20 +533,6 @@ pub const Token = struct {
         VOID,
         WHILE,
     };
-};
-
-pub const Position = struct {
-    // the byte in src this token starts at
-    pos: u32 = 0,
-
-    // the line this token is on (1-based)
-    line: u32 = 0,
-
-    // the byte in src of the line this token is on, the actual token position on
-    // the line is at pos - line_start
-    line_start: u32 = 0,
-
-    pub const ZERO: Position = .{};
 };
 
 const t = @import("t.zig");

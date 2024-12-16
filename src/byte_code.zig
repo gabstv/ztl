@@ -6,9 +6,9 @@ const config = @import("config.zig");
 pub const VERSION: u8 = 0;
 
 pub fn ByteCode(comptime App: type) type {
-    const MAX_CALL_FRAMES = config.extract(App, "elz_max_call_frames");
-    const INITIAL_CODE_SIZE = config.extract(App, "elz_initial_code_size");
-    const INITIAL_DATA_SIZE = config.extract(App, "elz_initial_data_size");
+    const MAX_CALL_FRAMES = config.extract(App, "zt_max_call_frames");
+    const INITIAL_CODE_SIZE = config.extract(App, "zt_initial_code_size");
+    const INITIAL_DATA_SIZE = config.extract(App, "zt_initial_data_size");
 
     return struct {
         allocator: Allocator,
@@ -475,6 +475,7 @@ pub const OpCode = enum(u8) {
     MULTIPLY,
     NEGATE,
     NOT,
+    OUTPUT,
     POP,
     PRINT,
     PUSH,
@@ -531,7 +532,7 @@ test "bytecode: write + disassemble" {
 test "bytecode: functions debug none" {
     defer t.reset();
     const App = struct {
-        pub const elz_debug = config.DebugMode.none;
+        pub const zt_debug = config.DebugMode.none;
     };
 
     var b = try ByteCode(App).init(t.arena.allocator());
@@ -561,7 +562,7 @@ test "bytecode: functions debug none" {
 test "bytecode: functions debug minimal" {
     defer t.reset();
     const App = struct {
-        pub const elz_debug = config.DebugMode.minimal;
+        pub const zt_debug = config.DebugMode.minimal;
     };
 
     var b = try ByteCode(App).init(t.arena.allocator());
@@ -591,7 +592,7 @@ test "bytecode: functions debug minimal" {
 test "bytecode: functions debug full" {
     defer t.reset();
     const App = struct {
-        pub const elz_debug = config.DebugMode.full;
+        pub const zt_debug = config.DebugMode.full;
     };
 
     var b = try ByteCode(App).init(t.arena.allocator());

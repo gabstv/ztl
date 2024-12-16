@@ -10,7 +10,7 @@ const Allocator = std.mem.Allocator;
 const Stack = std.ArrayListUnmanaged(Value);
 
 pub fn VM(comptime App: type) type {
-    const MAX_CALL_FRAMES = config.extract(App, "elz_max_call_frames");
+    const MAX_CALL_FRAMES = config.extract(App, "zt_max_call_frames");
     return struct {
         _arena: std.heap.ArenaAllocator,
 
@@ -36,7 +36,12 @@ pub fn VM(comptime App: type) type {
             self._arena.deinit();
         }
 
-        pub fn run(self: *Self, byte_code: []const u8) !Value {
+        // See template.zig's hack around globals to see why we're doing this
+        pub fn injectLocal(self: *Self, value: Value) !void {
+            return self._stack.append(self._arena.allocator(), value);
+        }
+
+        pub fn run(self: *Self, byte_code: []const u8, writer: anytype) !Value {
             const version = byte_code[0];
             if (version != VERSION) {
                 return error.IncompatibleVersion;
@@ -73,6 +78,7 @@ pub fn VM(comptime App: type) type {
                 switch (op_code) {
                     .POP => _ = stack.pop(),
                     .PUSH => try stack.append(allocator, stack.getLast()),
+                    .OUTPUT => try stack.pop().format("", .{}, writer),
                     .CONSTANT_I64 => {
                         const value = @as(i64, @bitCast(ip[0..8].*));
                         try stack.append(allocator, .{ .i64 = value });
@@ -264,7 +270,7 @@ pub fn VM(comptime App: type) type {
                     },
                     .PRINT => std.debug.print("{}\n", .{stack.pop()}),
                     .RETURN => {
-                        const value = stack.pop();
+                        const value = if (stack.items.len > 0) stack.pop() else Value{.null = {}};
                         if (frame_count == 0) {
                             return value;
                         }

@@ -4,18 +4,42 @@ pub const VM = @import("vm.zig").VM;
 pub const Value = @import("value.zig").Value;
 pub const DebugMode = @import("config.zig").DebugMode;
 pub const Compiler = @import("compiler.zig").Compiler;
+pub const Template = @import("template.zig").Template;
 pub const disassemble = @import("byte_code.zig").disassemble;
+
+pub const Error = struct {
+    desc: []const u8,
+    position: ?Position = null,
+
+    pub fn format(self: Error, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        return writer.print("{s}", .{self.desc});
+    }
+};
+
+pub const Position = struct {
+    // the byte in src this token starts at
+    pos: u32 = 0,
+
+    // the line this token is on (1-based)
+    line: u32 = 0,
+
+    // the byte in src of the line this token is on, the actual token position on
+    // the line is at pos - line_start
+    line_start: u32 = 0,
+
+    pub const ZERO: Position = .{};
+};
 
 const t = @import("t.zig");
 
 test {
-    // std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(@This());
 }
 
-test "elz: local limit" {
+test "zt: local limit" {
     blk: {
         var c = Compiler(struct {
-            pub const elz_max_locals = 3;
+            pub const zt_max_locals = 3;
         }).init(t.allocator) catch unreachable;
         defer c.deinit();
 
@@ -24,7 +48,7 @@ test "elz: local limit" {
             \\ var b = 1;
             \\ var c = 1;
             \\ var d = 1;
-        ) catch {
+        , .{}) catch {
             try t.expectString("Maximum number of local variable (3) exceeded", c.err.?.desc);
             break :blk;
         };
@@ -33,18 +57,18 @@ test "elz: local limit" {
 
     {
         var c = Compiler(struct {
-            pub const elz_max_locals = 3;
+            pub const zt_max_locals = 3;
         }).init(t.allocator) catch unreachable;
         defer c.deinit();
         try c.compile(
             \\ var a = 1;
             \\ var b = 1;
             \\ var c = 1;
-        );
+        , .{});
     }
 }
 
-test "elz: arithmetic" {
+test "zt: arithmetic" {
     try testReturnValue(.{ .i64 = 9 }, "return 1 + 8;");
     try testReturnValue(.{ .i64 = -1 }, "return 10 - 11;");
     try testReturnValue(.{ .i64 = 14 }, "return 2 * 7;");
@@ -68,12 +92,12 @@ test "elz: arithmetic" {
     try testReturnValue(.{ .f64 = 0.7843137254901962 }, "return 4 / 5.1;");
 }
 
-test "elz: not" {
+test "zt: not" {
     try testReturnValue(.{ .bool = true }, "return !false;");
     try testReturnValue(.{ .bool = false }, "return !true;");
 }
 
-test "elz: comparison int" {
+test "zt: comparison int" {
     try testReturnValue(.{ .bool = true }, "return 1 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1 == 2;");
     try testReturnValue(.{ .bool = false }, "return 1 != 1;");
@@ -96,7 +120,7 @@ test "elz: comparison int" {
     try testReturnValue(.{ .bool = false }, "return 2 <= 1;");
 }
 
-test "elz: comparison float" {
+test "zt: comparison float" {
     try testReturnValue(.{ .bool = true }, "return 1.13 == 1.13;");
     try testReturnValue(.{ .bool = false }, "return 1.13 == 2.08;");
     try testReturnValue(.{ .bool = false }, "return 1.13 != 1.13;");
@@ -119,7 +143,7 @@ test "elz: comparison float" {
     try testReturnValue(.{ .bool = false }, "return 2.08 <= 1.13;");
 }
 
-test "elz: comparison int - float" {
+test "zt: comparison int - float" {
     try testReturnValue(.{ .bool = true }, "return 1 == 1.0;");
     try testReturnValue(.{ .bool = false }, "return 1 == 1.1;");
     try testReturnValue(.{ .bool = false }, "return 1 != 1.0;");
@@ -142,7 +166,7 @@ test "elz: comparison int - float" {
     try testReturnValue(.{ .bool = false }, "return 2 <= 1.99;");
 }
 
-test "elz: comparison float - int" {
+test "zt: comparison float - int" {
     try testReturnValue(.{ .bool = true }, "return 1.0 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1.1 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1.0 != 1;");
@@ -165,7 +189,7 @@ test "elz: comparison float - int" {
     try testReturnValue(.{ .bool = false }, "return 10.1 <= 10;");
 }
 
-test "elz: comparison bool" {
+test "zt: comparison bool" {
     try testReturnValue(.{ .bool = true }, "return true == true;");
     try testReturnValue(.{ .bool = true }, "return false == false;");
     try testReturnValue(.{ .bool = false }, "return true == false;");
@@ -177,7 +201,7 @@ test "elz: comparison bool" {
     try testReturnValue(.{ .bool = true }, "return false != true;");
 }
 
-test "elz: comparison null" {
+test "zt: comparison null" {
     try testReturnValue(.{ .bool = true }, "return null == null;");
     try testReturnValue(.{ .bool = false }, "return null != null;");
 
@@ -200,7 +224,7 @@ test "elz: comparison null" {
     try testReturnValue(.{ .bool = true }, "return false != null;");
 }
 
-test "elz: comparison string" {
+test "zt: comparison string" {
     try testReturnValue(.{ .bool = true }, "return `abc` == `abc`;");
     try testReturnValue(.{ .bool = false }, "return `abc` == `123`;");
     try testReturnValue(.{ .bool = false }, "return `abc` == `ABC`;");
@@ -225,7 +249,7 @@ test "elz: comparison string" {
     try testReturnValue(.{ .bool = false }, "return `ABC` >= `abc`;");
 }
 
-test "elz: increment/decrement" {
+test "zt: increment/decrement" {
     try testReturnValue(.{ .i64 = 4 },
         \\ var i = 0;
         \\ i++;
@@ -267,7 +291,7 @@ test "elz: increment/decrement" {
     try testError("Expected semicolon (';'), got '++' (PLUS_PLUS)", "return 100++;");
 }
 
-test "elz: variables" {
+test "zt: variables" {
     try testReturnValue(.{ .string = "Leto" },
         \\ var name = `Leto`;
         \\ return name;
@@ -317,7 +341,7 @@ test "elz: variables" {
     try testError("Identifier \"" ++ "a" ** 128 ++ "\" exceeds the character limit of 127", "var " ++ "a" ** 128 ++ " = null;");
 }
 
-test "elz: if" {
+test "zt: if" {
     try testReturnValue(.{ .i64 = 1234 },
         \\ if (true) {
         \\   return 1234;
@@ -379,7 +403,7 @@ test "elz: if" {
     );
 }
 
-test "elz: logical operators" {
+test "zt: logical operators" {
     try testReturnValue(.{ .bool = false }, "return 1 == 1 and 3 == 2;");
     try testReturnValue(.{ .bool = false }, "return 0 == 1 and 3 == 2;");
     try testReturnValue(.{ .bool = false }, "return 1 == 3 or 3 == 4;");
@@ -389,7 +413,7 @@ test "elz: logical operators" {
     try testReturnValue(.{ .bool = false }, "return 1 == 3 and (3 == 4 or 4 == 4);");
 }
 
-test "elz: while" {
+test "zt: while" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var i = 0;
         \\ while (i < 10) {
@@ -407,7 +431,7 @@ test "elz: while" {
     );
 }
 
-test "elz: for" {
+test "zt: for" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var i = 0;
         \\ for (var x = 0; x < 10; x = x + 1) {
@@ -459,11 +483,11 @@ test "elz: for" {
     );
 }
 
-test "elz: empty scope" {
+test "zt: empty scope" {
     try testReturnValue(.{ .null = {} }, "{} return null;"); // doesn't crash, yay!
 }
 
-test "elz: functions" {
+test "zt: functions" {
     try testReturnValue(.{ .i64 = 25 },
         \\ return value(3);
         \\
@@ -552,7 +576,7 @@ test "elz: functions" {
     );
 }
 
-test "elz: array initialization" {
+test "zt: array initialization" {
     {
         var arr = [_]Value{};
         try testReturnValue(.{ .array = .{ .items = &arr } }, "return [];");
@@ -581,7 +605,7 @@ test "elz: array initialization" {
     }
 }
 
-test "elz: array indexing" {
+test "zt: array indexing" {
     try testReturnValue(.{ .i64 = 10 }, "return [10, 2002, 5][0];");
     try testReturnValue(.{ .i64 = 2002 }, "return [10, 2002, 5][1];");
     try testReturnValue(.{ .i64 = 5 }, "return [10, 2002, 5][2];");
@@ -596,7 +620,7 @@ test "elz: array indexing" {
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return [1,2][-3];");
 }
 
-test "elz: array assignment" {
+test "zt: array assignment" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var arr = [0];
         \\ arr[0] = 10;
@@ -677,11 +701,11 @@ test "elz: array assignment" {
     try testRuntimeError("Index out of range. Index: -2, Len: 1", "[1][-2] = 1;");
 }
 
-test "elz: array length" {
+test "zt: array length" {
     try testReturnValue(.{ .i64 = 0 }, "return [].len;");
 }
 
-test "elz: string indexing" {
+test "zt: string indexing" {
     try testReturnValue(.{ .string = "a" }, "return `abc`[0];");
     try testReturnValue(.{ .string = "b" }, "return `abc`[1];");
     try testReturnValue(.{ .string = "c" }, "return `abc`[2];");
@@ -696,7 +720,7 @@ test "elz: string indexing" {
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return `ab`[-3];");
 }
 
-test "elz: invalid type indexing" {
+test "zt: invalid type indexing" {
     try testRuntimeError("Cannot index an integer", "return 0[0];");
     try testRuntimeError("Cannot index a float", "return 12.3[-1];");
     try testRuntimeError("Cannot index a boolean", "return true[0];");
@@ -709,7 +733,7 @@ test "elz: invalid type indexing" {
     try testRuntimeError("Invalid index or property type, got an array", "return [][[]];");
 }
 
-test "elz: orelse" {
+test "zt: orelse" {
     try testReturnValue(.{ .i64 = 4 }, "return 4 orelse 1;");
     try testReturnValue(.{ .i64 = 2 }, "return null orelse 2;");
     try testReturnValue(.{ .i64 = 3 }, "return null orelse 2+1;");
@@ -719,15 +743,15 @@ test "elz: orelse" {
 
 fn testReturnValue(expected: Value, src: []const u8) !void {
     try testReturnValueWithApp(struct {
-        pub const elz_debug = DebugMode.full;
+        pub const zt_debug = DebugMode.full;
     }, expected, src);
 
     try testReturnValueWithApp(struct {
-        pub const elz_max_locals = 256;
+        pub const zt_max_locals = 256;
     }, expected, src);
 
     try testReturnValueWithApp(struct {
-        pub const elz_max_locals = 300;
+        pub const zt_max_locals = 300;
     }, expected, src);
 
     try testReturnValueWithApp(void, expected, src);
@@ -737,7 +761,7 @@ fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) 
     var c = try Compiler(App).init(t.allocator);
     defer c.deinit();
 
-    c.compile(src) catch |err| {
+    c.compile(src, .{}) catch |err| {
         std.debug.print("Compilation error: {}\n", .{c.err.?});
         return err;
     };
@@ -749,7 +773,8 @@ fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) 
     var vm = VM(App).init(t.allocator);
     defer vm.deinit();
 
-    const value = vm.run(byte_code) catch |err| {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    const value = vm.run(byte_code, buf.writer(t.allocator)) catch |err| {
         std.debug.print("{any}", .{err});
         if (vm.err) |e| {
             std.debug.print("{any} {s}\n", .{ e.err, e.desc });
@@ -770,7 +795,7 @@ fn testError(expected: []const u8, src: []const u8) !void {
     var c = Compiler(void).init(t.allocator) catch unreachable;
     defer c.deinit();
 
-    c.compile(src) catch {
+    c.compile(src, .{}) catch {
         const ce = c.err orelse unreachable;
         if (std.mem.indexOf(u8, ce.desc, expected) == null) {
             std.debug.print("Wrong error, expected: {s} but got:\n{}\n", .{ expected, ce });
@@ -786,7 +811,7 @@ fn testRuntimeError(expected: []const u8, src: []const u8) !void {
     var c = try Compiler(void).init(t.allocator);
     defer c.deinit();
 
-    c.compile(src) catch |err| {
+    c.compile(src, .{}) catch |err| {
         std.debug.print("Compilation error: {}\n", .{c.err.?});
         return err;
     };
@@ -798,7 +823,8 @@ fn testRuntimeError(expected: []const u8, src: []const u8) !void {
     var vm = VM(void).init(t.allocator);
     defer vm.deinit();
 
-    _ = vm.run(byte_code) catch {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    _ = vm.run(byte_code, buf.writer(t.allocator)) catch {
         const ve = vm.err orelse unreachable;
         if (std.mem.indexOf(u8, ve.desc, expected) == null) {
             std.debug.print("Wrong error, expected: {s} but got:\n{s}\n", .{ expected, ve.desc });

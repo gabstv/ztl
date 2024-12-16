@@ -4,32 +4,13 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const elz_module = b.addModule("elz", .{
-        .root_source_file = b.path("src/elz.zig"),
+    _ = b.addModule("zt", .{
+        .root_source_file = b.path("src/zt.zig"),
     });
-
-    // setup executable
-    const exe = b.addExecutable(.{
-        .name = "elz",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    exe.root_module.addImport("elz", elz_module);
-    b.installArtifact(exe);
-
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
 
     // setup tests
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
-
     const tests = b.addTest(.{
-        .root_source_file = b.path("src/elz.zig"),
+        .root_source_file = b.path("src/zt.zig"),
         .target = target,
         .optimize = optimize,
         .test_runner = b.path("test_runner.zig"),
