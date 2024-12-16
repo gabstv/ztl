@@ -741,6 +741,24 @@ test "zt: orelse" {
     try testReturnValue(.{ .i64 = 1 }, "return 1 orelse null orelse null orelse `hi`;");
 }
 
+test "zt: string dedupe" {
+    try testReturnValueWithApp(
+        struct { pub const zt_deduplicate_string_literals = true; },
+        .{ .string = "hello" },
+        \\ var x = "hello";
+        \\ var y = "hello";
+        \\ return x;
+    );
+
+    try testReturnValueWithApp(
+        struct { pub const zt_deduplicate_string_literals = false; },
+        .{ .string = "hello" },
+        \\ var x = "hello";
+        \\ var y = "hello";
+        \\ return x;
+    );
+}
+
 fn testReturnValue(expected: Value, src: []const u8) !void {
     try testReturnValueWithApp(struct {
         pub const zt_debug = DebugMode.full;

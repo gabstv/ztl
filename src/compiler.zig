@@ -25,6 +25,7 @@ const CompileOpts = struct {
 
 pub fn Compiler(comptime App: type) type {
     const MAX_LOCALS = config.extract(App, "zt_max_locals");
+    const DEDUPLICATE_STRING_LITERALS = config.extract(App, "zt_deduplicate_string_literals");
 
     return struct {
         // the ByteCode that our compiler is generating
@@ -52,6 +53,10 @@ pub fn Compiler(comptime App: type) type {
         _scopes: std.ArrayListUnmanaged(Scope),
         _locals: std.ArrayListUnmanaged(Local),
 
+        // Used to dedupe string literals. Stores the data_start value of
+        // a given string. Can be turned off by setting zt_deduplicate_string_literals = false;
+        _string_literals: std.StringHashMapUnmanaged(u32),
+
         const Self = @This();
 
         pub fn init(allocator: Allocator) !Self {
@@ -69,6 +74,7 @@ pub fn Compiler(comptime App: type) type {
                 ._locals = .{},
                 ._functions = .{},
                 ._arena = allocator,
+                ._string_literals = .{},
                 ._byte_code = try ByteCode(App).init(allocator),
                 ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
                 ._previous_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
@@ -470,7 +476,23 @@ pub fn Compiler(comptime App: type) type {
         }
 
         fn string(self: *Self, _: bool) CompileError!void {
-            return self._byte_code.string(self._previous_token.value.STRING);
+            const s = self._previous_token.value.STRING;
+            const literal = s.value;
+
+            if (DEDUPLICATE_STRING_LITERALS == false) {
+                _ = try self._byte_code.string(literal);
+                return;
+            }
+
+            if (self._string_literals.get(literal)) |data_start| {
+                return self._byte_code.stringRef(data_start);
+            }
+
+            const data_start = try self._byte_code.string(literal);
+            // if the string was escaped, we need to dupe it since it's only
+            // being held short-term by the scanner.
+            const owned = if (s.escaped) try self._arena.dupe(u8, literal) else literal;
+            try self._string_literals.put(self._arena, owned, data_start);
         }
 
         fn @"null"(self: *Self, _: bool) CompileError!void {

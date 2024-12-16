@@ -197,7 +197,7 @@ pub fn ByteCode(comptime App: type) type {
             return self.frame.write(self.allocator, &.{if (value) 1 else 0});
         }
 
-        pub fn string(self: *Self, value: []const u8) !void {
+        pub fn string(self: *Self, value: []const u8) !u32 {
             const data_start = self.data.pos;
 
             // Storing the end, rather than the length, means one less addition
@@ -207,8 +207,13 @@ pub fn ByteCode(comptime App: type) type {
             try self.data.write(self.allocator, std.mem.asBytes(&data_end));
             try self.data.write(self.allocator, value);
 
+            try self.stringRef(data_start);
+            return data_start;
+        }
+
+        pub fn stringRef(self: *Self, data_start: u32) !void {
             try self.op(.CONSTANT_STRING);
-            return self.frame.write(self.allocator, std.mem.asBytes(&data_start));
+            try self.frame.write(self.allocator, std.mem.asBytes(&data_start));
         }
 
         pub fn @"null"(self: *Self) !void {

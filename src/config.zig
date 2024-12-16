@@ -10,6 +10,7 @@ const Defaults = struct {
     pub const zt_max_call_frames: u8 = 255;
     pub const zt_initial_code_size: u32 = 512;
     pub const zt_initial_data_size: u32 = 512;
+    pub const zt_deduplicate_string_literals: bool = true;
 };
 
 pub fn extract(comptime App: type, comptime field_name: []const u8) @TypeOf(@field(Defaults, field_name)) {
