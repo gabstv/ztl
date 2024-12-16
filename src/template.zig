@@ -183,11 +183,7 @@ pub fn Template(comptime App: type) type {
             while (true) {
                 const idx = std.mem.indexOfScalarPos(u8, src, pos, '%') orelse end;
                 if (idx == end) {
-                    var literal = src[start..];
-                    if (trim_left) {
-                       literal = std.mem.trimLeft(u8, literal, &std.ascii.whitespace);
-                    }
-                    try appendOut(&buf, literal);
+                    try appendOut(&buf, src[start..], trim_left);
                     break;
                 }
 
@@ -199,7 +195,7 @@ pub fn Template(comptime App: type) type {
                 var next = src[idx + 1];
                 if (next == '%') {
                     // <%%  => '<%'
-                    try appendOut(&buf, src[start..idx]);
+                    try appendOut(&buf, src[start..idx], false);
                     pos = idx + 1;
                     start = pos;
                     continue;
@@ -217,10 +213,7 @@ pub fn Template(comptime App: type) type {
                     literal = std.mem.trimRight(u8, literal, &std.ascii.whitespace);
                 }
 
-                if (trim_left) {
-                    literal = std.mem.trimLeft(u8, literal, &std.ascii.whitespace);
-                }
-                try appendOut(&buf, literal);
+                try appendOut(&buf, literal, trim_left);
 
                 // find the position of the closing tag, %>
                 const code_end, const end_tag_len, trim_left = try self.findCodeEnd(&scanner, src, pos);
@@ -313,15 +306,26 @@ const ZtSource = struct {
     }
 };
 
-fn appendOut(buf: *std.ArrayList(u8), content: []const u8) !void {
-    if (content.len == 0) {
+fn appendOut(buf: *std.ArrayList(u8), content: []const u8, trim_left: bool) !void {
+    var literal = content;
+
+    if (trim_left) {
+        literal = std.mem.trimLeft(u8, literal, &std.ascii.whitespace);
+    }
+    if (literal.len == 0) {
         return;
     }
 
-    try buf.ensureUnusedCapacity(4 + content.len);
-    buf.appendSliceAssumeCapacity("$`");
-    buf.appendSliceAssumeCapacity(content);
-    buf.appendSliceAssumeCapacity("`;");
+    if (std.mem.indexOfScalarPos(u8, literal, 0, '`') == null) {
+        try buf.ensureUnusedCapacity(4 + literal.len);
+        buf.appendSliceAssumeCapacity("$`");
+        buf.appendSliceAssumeCapacity(literal);
+        buf.appendSliceAssumeCapacity("`;");
+    } else {
+        try buf.appendSlice("$\"");
+        try std.zig.stringEscape(literal, "", .{}, buf.writer());
+        try buf.appendSlice("\";");
+    }
 }
 
 fn sortVariableNames(values: [][]const u8) void {
@@ -348,6 +352,10 @@ test "Template: edge cases" {
     try testTemplate("%>a", "%>a", .{});
     try testTemplate("%-Hi", "%-Hi", .{});
     try testTemplate("<%-", "<%%-", .{});
+
+    try testTemplate("`Hello World`", "`Hello World`", .{});
+    try testTemplate("`Hello\"World`", "`Hello\"World`", .{});
+    try testTemplate("`Hello\"Wor\nl`d`", "`Hello\"Wor\nl`d`", .{});
 }
 
 test "Template: output literals" {
