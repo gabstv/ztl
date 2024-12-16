@@ -221,11 +221,15 @@ pub fn Template(comptime App: type) type {
                 if (next == '=') {
                     pos += 1; // skip the =
                     const ELZ_SET_EXP = "\n$";
-                    const expression = src[pos..code_end];
-                    try buf.ensureUnusedCapacity(ELZ_SET_EXP.len + expression.len + 2);
-                    buf.appendSliceAssumeCapacity(ELZ_SET_EXP);
-                    buf.appendSliceAssumeCapacity(expression);
-                    buf.appendSliceAssumeCapacity(";");
+                    const expression = std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace);
+                    if (expression.len > 0) {
+                        try buf.ensureUnusedCapacity(ELZ_SET_EXP.len + expression.len + 2);
+                        buf.appendSliceAssumeCapacity(ELZ_SET_EXP);
+                        buf.appendSliceAssumeCapacity(expression);
+                        if (expression[expression.len - 1] != ';') {
+                            buf.appendSliceAssumeCapacity(";");
+                        }
+                    }
                 } else {
                     try buf.append('\n');
                     try buf.appendSlice(std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace));
@@ -339,9 +343,15 @@ fn sortVariableNames(values: [][]const u8) void {
 const t = @import("t.zig");
 test "Template: simple" {
     try testTemplate("Simple", "Simple", .{});
+    try testTemplate("Simple", "<%= `Simple` %>", .{});
+    try testTemplate("Simple", "<%= `Simple`; %>", .{});
+    try testTemplate("Simple", "<%=`Simple`%>", .{});
+    try testTemplate("Simple", "<%=`Simple`;%>", .{});
 }
 
 test "Template: edge cases" {
+    try testTemplate("", "<%= %>", .{});
+
     try testTemplate("hello %", "hello %", .{});
     try testTemplate("hello % ", "hello % ", .{});
     try testTemplate("hello %%", "hello %%", .{});
