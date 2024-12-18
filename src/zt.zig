@@ -1007,6 +1007,23 @@ test "zt: continue invalid" {
     );
 }
 
+test "zt: ternary" {
+    try testReturnValue(.{ .i64 = 1 }, "return true ? 1 : 10;");
+    // try testReturnValue(.{ .i64 = 10 }, "return false ? 1 : 10;");
+
+    // try testReturnValue(.{ .i64 = 3 },
+    //     \\ var x = 2;
+    //     \\ x += (x % 2 == 0) ? 1 : 2;
+    //     \\ return x;
+    // );
+
+    // try testReturnValue(.{ .i64 = 5 },
+    //     \\ var x = 3;
+    //     \\ x += (x % 2 == 0) ? 1 : 2;
+    //     \\ return x;
+    // );
+}
+
 fn testReturnValue(expected: Value, src: []const u8) !void {
     // try testReturnValueWithApp(struct {
     //     pub const zt_debug = DebugMode.full;
@@ -1034,7 +1051,7 @@ fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) 
 
     const byte_code = try c.byteCode(t.allocator);
     defer t.allocator.free(byte_code);
-    // disassemble(App, byte_code, std.io.getStdErr().writer()) catch unreachable;
+    disassemble(App, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
     var vm = VM(App).init(t.allocator);
     defer vm.deinit();

@@ -783,6 +783,17 @@ pub fn Compiler(comptime App: type) type {
             try jump_if_false.goto();
         }
 
+        fn ternary(self: *Self, _: bool) CompileError!void {
+            const jump_if_false = try self._jumper.forward(self, .JUMP_IF_FALSE_POP);
+            try self.expression();
+            try self.consume(.COLON, "colon (':')");
+
+            const jump_if_true = try self._jumper.forward(self, .JUMP);
+            try jump_if_false.goto();
+            try self.expression();
+            try jump_if_true.goto();
+        }
+
         fn localVariableIndex(self: *const Self, name: []const u8) ?usize {
             const locals = self._locals.items;
             const local_scope_start = self.currentScope().local_start;
@@ -1148,6 +1159,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.ORELSE, C.@"orelse", null, Precedence.OR },
             .{ Token.Type.PERCENT, C.binary, null, Precedence.FACTOR },
             .{ Token.Type.PLUS, C.binary, null, Precedence.TERM },
+            .{ Token.Type.QUESTION_MARK, C.ternary, null, Precedence.OR },
             .{ Token.Type.RETURN, null, null, Precedence.NONE },
             .{ Token.Type.RIGHT_BRACE, null, null, Precedence.NONE },
             .{ Token.Type.RIGHT_PARENTHESIS, null, null, Precedence.NONE },

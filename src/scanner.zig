@@ -86,6 +86,7 @@ pub const Scanner = struct {
                 ',' => return self.createSimpleToken("COMMA", ","),
                 '.' => return self.createSimpleToken("DOT", "."),
                 '$' => return self.createSimpleToken("DOLLAR", "$"),
+                '?' => return self.createSimpleToken("QUESTION_MARK", "?"),
                 '%' => {
                     if (self.at(pos) == '{') {
                         pos += 1;
@@ -115,6 +116,7 @@ pub const Scanner = struct {
                     }
                     return self.createSimpleToken("MINUS", "-");
                 },
+                ':' => return self.createSimpleToken("COLON", ":"),
                 '*' => return self.createSimpleToken("STAR", "*"),
                 ';' => return self.createSimpleToken("SEMICOLON", ";"),
                 '/' => {
@@ -445,6 +447,7 @@ pub const Token = struct {
         BANG_EQUAL,
         BOOLEAN: bool,
         BREAK,
+        COLON,
         COMMA,
         CONTINUE,
         DOLLAR,
@@ -478,6 +481,7 @@ pub const Token = struct {
         PLUS_EQUAL,
         PLUS_PLUS,
         PRINT,
+        QUESTION_MARK,
         RETURN,
         RIGHT_BRACE,
         RIGHT_BRACKET,
@@ -503,6 +507,7 @@ pub const Token = struct {
         BANG_EQUAL,
         BOOLEAN,
         BREAK,
+        COLON,
         COMMA,
         CONTINUE,
         DOLLAR,
@@ -536,6 +541,7 @@ pub const Token = struct {
         PLUS_EQUAL,
         PLUS_PLUS,
         PRINT,
+        QUESTION_MARK,
         RETURN,
         RIGHT_BRACE,
         RIGHT_BRACKET,
