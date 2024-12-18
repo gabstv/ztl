@@ -134,47 +134,9 @@ pub fn ByteCode(comptime App: type) type {
             return self.frame.write(self.allocator, data);
         }
 
-        pub fn jump(self: *Self, jump_pos: u32) !void {
-            // jump is only ever used when we're jumping backwards. If we were
-            // jumping forwards, we'd need to use prepareJump + finalizeJump
-            // since the final jump location wouldn't be known yet.
-            std.debug.assert(self.frame.pos > jump_pos);
-
-            // -1 because when the VM executes this, it'll alread have read
-            // the JUMP opcode, and we want our backwards jump to skip that
-            // also
-            const relative: i64 = @as(i64, jump_pos) - self.frame.pos - 1;
-            if (relative < -32_768) {
-                return error.JumpTooLarge;
-            }
-
-            try self.op(.JUMP);
-            var relative_i16: i16 = @intCast(relative);
-            try self.frame.write(self.allocator, std.mem.asBytes(&relative_i16));
-        }
-
-        pub fn prepareJump(self: *Self, op_code: OpCode) !u32 {
-            try self.op(op_code);
-            // create placeholder for jump address (which finalizeJump will fill)
-            try self.frame.write(self.allocator, &.{ 0, 0 });
-            return @intCast(self.frame.pos);
-        }
-
-        pub fn finalizeJump(self: *Self, jump_pos: u32) !void {
-            // finalize jump is only ever used when we're jumping forward
-            // (we use prepareJump + finalizeJump because the address to jump
-            // to isn't known yet, so it must be ahead);
-            std.debug.assert(jump_pos < self.frame.pos);
-
-            // +2 because when the VM executes this, it'll be at the 2 byte offset
-            // and we want it to jump that as well.
-            const relative: i64 = 2 + self.frame.pos - @as(i64, jump_pos);
-            if (relative > 32_767) {
-                return error.JumpTooLarge;
-            }
-
-            const relative_i16: i16 = @intCast(relative);
-            @memcpy(self.frame.buf[jump_pos - 2 .. jump_pos], std.mem.asBytes(&relative_i16));
+        pub fn insertInt(self: *Self, comptime T: type, pos: u32, value: T) void {
+            const end = pos + @sizeOf(T);
+            @memcpy(self.frame.buf[pos .. end], std.mem.asBytes(&value));
         }
 
         pub fn call(self: *Self, data_pos: u32) !void {

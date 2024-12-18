@@ -97,6 +97,7 @@ pub const Value = union(enum) {
             else => return error.UnsupportedType,
         }
     }
+
     pub fn deinit(self: *Value, allocator: Allocator) void {
         switch (self.*) {
             .array => |*arr| arr.deinit(allocator),

@@ -6,6 +6,8 @@ const Allocator = std.mem.Allocator;
 const Position = zt.Position;
 
 const AND_BIT = @as(u24, @bitCast([3]u8{ 'a', 'n', 'd' }));
+const BREAK_BIT = @as(u40, @bitCast([5]u8{ 'b', 'r', 'e', 'a', 'k' }));
+const CONTINUE_BIT = @as(u64, @bitCast([8]u8{ 'c', 'o', 'n', 't', 'i', 'n', 'u', 'e' }));
 const ELSE_BIT = @as(u32, @bitCast([4]u8{ 'e', 'l', 's', 'e' }));
 const FALSE_BIT = @as(u40, @bitCast([5]u8{ 'f', 'a', 'l', 's', 'e' }));
 const FN_BIT = @as(u16, @bitCast([2]u8{ 'f', 'n' }));
@@ -375,11 +377,16 @@ pub const Scanner = struct {
                 FALSE_BIT => return self.createToken(.{ .BOOLEAN = false }, value),
                 WHILE_BIT => return self.createSimpleToken("WHILE", value),
                 PRINT_BIT => return self.createSimpleToken("PRINT", value),
+                BREAK_BIT => return self.createSimpleToken("BREAK", value),
                 else => {},
             },
             6 => switch (@as(u48, @bitCast(value[0..6].*))) {
                 RETURN_BIT => return self.createSimpleToken("RETURN", value),
                 ORELSE_BIT => return self.createSimpleToken("ORELSE", value),
+                else => {},
+            },
+            8 => switch (@as(u64, @bitCast(value[0..8].*))) {
+                CONTINUE_BIT => return self.createSimpleToken("CONTINUE", value),
                 else => {},
             },
             else => {},
@@ -437,7 +444,9 @@ pub const Token = struct {
         BANG,
         BANG_EQUAL,
         BOOLEAN: bool,
+        BREAK,
         COMMA,
+        CONTINUE,
         DOLLAR,
         DOT,
         ELSE,
@@ -493,7 +502,9 @@ pub const Token = struct {
         BANG,
         BANG_EQUAL,
         BOOLEAN,
+        BREAK,
         COMMA,
+        CONTINUE,
         DOLLAR,
         DOT,
         ELSE,
