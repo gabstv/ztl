@@ -57,8 +57,6 @@ pub fn Compiler(comptime App: type) type {
         // a given string. Can be turned off by setting zt_deduplicate_string_literals = false;
         _string_literals: std.StringHashMapUnmanaged(u32),
 
-        _break_continues: std.ArrayListUnmanaged(*BreakContinue),
-
         // Jumping is one of the messier parts of the code. So we try to put as
         // much of the logic into its own struct.
         _jumper: Jumper(App),
@@ -81,7 +79,6 @@ pub fn Compiler(comptime App: type) type {
                 ._functions = .{},
                 ._arena = allocator,
                 ._string_literals = .{},
-                ._break_continues = .{},
                 ._jumper = Jumper(App).init(allocator),
                 ._byte_code = try ByteCode(App).init(allocator),
                 ._current_token = .{ .value = .{ .START = {} }, .position = Position.ZERO, .src = "" },
@@ -535,9 +532,11 @@ pub fn Compiler(comptime App: type) type {
         }
 
         fn string(self: *Self, _: bool) CompileError!void {
-            const s = self._previous_token.value.STRING;
-            const literal = s.value;
+            const string_token = self._previous_token.value.STRING;
+            return self.stringLiteral(string_token.value, string_token.escaped);
+        }
 
+        fn stringLiteral(self: *Self, literal: []const u8, needs_dupe: bool) !void {
             if (DEDUPLICATE_STRING_LITERALS == false) {
                 _ = try self._byte_code.string(literal);
                 return;
@@ -550,7 +549,7 @@ pub fn Compiler(comptime App: type) type {
             const data_start = try self._byte_code.string(literal);
             // if the string was escaped, we need to dupe it since it's only
             // being held short-term by the scanner.
-            const owned = if (s.escaped) try self._arena.dupe(u8, literal) else literal;
+            const owned = if (needs_dupe) try self._arena.dupe(u8, literal) else literal;
             try self._string_literals.put(self._arena, owned, data_start);
         }
 
@@ -651,6 +650,37 @@ pub fn Compiler(comptime App: type) type {
                 }
             }
             try self._byte_code.initializeArray(value_count);
+        }
+
+        fn map(self: *Self, _: bool) CompileError!void {
+            var entry_count: u32 = 0;
+            var bc = self._byte_code;
+            if (try self.match(.RIGHT_BRACE) == false) {
+                while (true) {
+                    entry_count += 1;
+                    const current_token = self._current_token;
+                    switch (current_token.value) {
+                        .INTEGER => |k| try bc.i64(k),
+                        .IDENTIFIER => |k| try self.stringLiteral(k, false),
+                        .STRING => |k| try self.stringLiteral(k.value, k.escaped),
+                        else => {
+                            try self.setErrorFmt("Map key must be an integer, string or identifier, got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) });
+                            return error.CompileError;
+                        }
+                    }
+                    try self.advance();
+                    try self.consume(.COLON, "key : value separator (':')");
+                    try self.expression();
+                    if (try self.match(.RIGHT_BRACE)) {
+                        break;
+                    }
+                    try self.consume(.COMMA, "value separator (',')");
+                    if (try self.match(.RIGHT_BRACE)) {
+                        break;
+                    }
+                }
+            }
+            try self._byte_code.initializeMap(entry_count);
         }
 
         fn index(self: *Self, can_assign: bool) CompileError!void {
@@ -1158,6 +1188,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.Type.OR, C.@"or", null, Precedence.OR },
             .{ Token.Type.ORELSE, C.@"orelse", null, Precedence.OR },
             .{ Token.Type.PERCENT, C.binary, null, Precedence.FACTOR },
+            .{ Token.Type.PERCENT_BRACE, null, C.map, Precedence.CALL },
             .{ Token.Type.PLUS, C.binary, null, Precedence.TERM },
             .{ Token.Type.QUESTION_MARK, C.ternary, null, Precedence.OR },
             .{ Token.Type.RETURN, null, null, Precedence.NONE },

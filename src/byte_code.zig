@@ -188,8 +188,19 @@ pub fn ByteCode(comptime App: type) type {
         }
 
         pub fn initializeArray(self: *Self, value_count: u32) !void {
-            try self.op(.INITIALIZE_ARRAY);
-            return self.frame.write(self.allocator, std.mem.asBytes(&value_count));
+            try self.op(.INITIALIZE);
+            var buf: [5]u8 = undefined;
+            buf[0] = @intFromEnum(OpCode.Initialize.ARRAY);
+            @memcpy(buf[1..], std.mem.asBytes(&value_count));
+            return self.frame.write(self.allocator, &buf);
+        }
+
+        pub fn initializeMap(self: *Self, entry_count: u32) !void {
+            try self.op(.INITIALIZE);
+            var buf: [5]u8 = undefined;
+            buf[0] = @intFromEnum(OpCode.Initialize.MAP);
+            @memcpy(buf[1..], std.mem.asBytes(&entry_count));
+            return self.frame.write(self.allocator, &buf);
         }
 
         pub fn setLocal(self: *Self, local_index: LocalIndex) !void {
@@ -390,10 +401,16 @@ pub fn disassemble(comptime App: type, byte_code: []const u8, writer: anytype) !
                 i += SL;
                 try std.fmt.format(writer, " @{d} {d}\n", .{ idx, value });
             },
-            .INITIALIZE_ARRAY => {
-                const value_count: u32 = @bitCast(code[i .. i + 4][0..4].*);
-                try std.fmt.format(writer, " {d}\n", .{value_count});
-                i += 4;
+            .INITIALIZE => {
+                const initialize_type: OpCode.Initialize = @enumFromInt(code[i]);
+                i += 1;
+                switch (initialize_type) {
+                    .ARRAY, .MAP => {
+                        const value_count: u32 = @bitCast(code[i .. i + 4][0..4].*);
+                        try std.fmt.format(writer, " {s} {d}\n", .{@tagName(initialize_type), value_count});
+                        i += 4;
+                    }
+                }
             },
             .CALL => {
                 const header_start = @as(u32, @bitCast(code[i .. i + 4][0..4].*));
@@ -433,7 +450,7 @@ pub const OpCode = enum(u8) {
     INCR_REF,
     INDEX_GET,
     INDEX_SET,
-    INITIALIZE_ARRAY,
+    INITIALIZE,
     JUMP,
     JUMP_IF_FALSE,
     JUMP_IF_FALSE_POP,
@@ -452,6 +469,11 @@ pub const OpCode = enum(u8) {
 
     const Debug = enum {
         FUNCTION_NAME,
+    };
+
+    pub const Initialize = enum {
+        ARRAY,
+        MAP,
     };
 };
 

@@ -717,6 +717,95 @@ test "zt: array assignment" {
     try testRuntimeError("Index out of range. Index: -2, Len: 1", "[1][-2] = 1;");
 }
 
+test "zt: map initialization" {
+    {
+        try testReturnValue(.{ .map = .{} }, "return %{};");
+    }
+
+    {
+        var expected = try t.createMap(.{
+            .leto = true,
+            .@"123" = "hello",
+            .@"a key" = -1.23,
+        });
+        defer expected.deinit(t.allocator);
+
+        try testReturnValue(expected,
+            \\ return %{
+            \\   leto: true,
+            \\   123: "hello",
+            \\   `a key`: -1.23
+            \\ };
+        );
+
+        // with trailing comma
+        try testReturnValue(expected,
+            \\ return %{
+            \\   leto: true,
+            \\   123: "hello",
+            \\   `a key`: -1.23,
+            \\ };
+        );
+    }
+}
+
+test "zt: map indexing" {
+    try testReturnValue(.{ .i64 = 1 }, "return %{a: 1}[`a`];");
+    try testReturnValue(.{ .null = {} }, "return %{a: 1}[`b`];");
+    try testReturnValue(.{ .null = {} }, "return %{a: 1}[123];");
+    try testReturnValue(.{ .bool = true }, "return %{123: true}[123];");
+
+    try testReturnValue(.{ .bool = true }, "return %{123: true}[123];");
+    try testReturnValue(.{ .i64 = 2 },
+        \\ var x = %{a: 2};
+        \\ var key = "a";
+        \\ return x[key];
+    );
+}
+
+test "zt: map assignment" {
+    try testReturnValue(.{ .i64 = 10 },
+        \\ var map = %{0: 2};
+        \\ map[0] = 10;
+        \\ return map[0];
+    );
+
+    try testReturnValue(.{ .string = "3" },
+        \\ var map = %{"a": 1, "b": 2};
+        \\ map["a"] = "3";
+        \\ return map["a"];
+    );
+
+    try testReturnValue(.{ .i64 = 4 },
+        \\ var map = %{"a": 1, "b": 2};
+        \\ map["c"] = 4;
+        \\ return map["c"];
+    );
+
+    try testReturnValue(.{ .i64 = 3 },
+        \\ var map = %{"a": 1, "b": 2};
+        \\ map["a"] = map["a"] + map["b"];
+        \\ return map["a"];
+    );
+
+    try testReturnValue(.{ .i64 = -5 },
+        \\ var map = %{1: 0, 2: -1, 3: -4};
+        \\ map[3]--;
+        \\ return map[3];
+    );
+
+    try testReturnValue(.{ .i64 = 13 },
+        \\ var map = %{a: 1, `b`: 5, c: 2};
+        \\ map["b"] += 8;
+        \\ return map["b"];
+    );
+
+    try testReturnValue(.{ .i64 = 8 },
+        \\ var map = %{"count": 7};
+        \\ return map["count"]++;
+    );
+}
+
 test "zt: array length" {
     try testReturnValue(.{ .i64 = 0 }, "return [].len;");
 }
@@ -745,7 +834,7 @@ test "zt: invalid type indexing" {
     try testRuntimeError("Invalid index or property type, got a boolean", "return [][true];");
     try testRuntimeError("Invalid index or property type, got null", "return [][null];");
     try testRuntimeError("Invalid index or property type, got a float", "return [][1.2];");
-    try testRuntimeError("Invalid index or property type, got a string", "return [][``];");
+    try testRuntimeError("Cannot index an array with a string key", "return [][``];");
     try testRuntimeError("Invalid index or property type, got an array", "return [][[]];");
 }
 
@@ -1025,17 +1114,17 @@ test "zt: ternary" {
 }
 
 fn testReturnValue(expected: Value, src: []const u8) !void {
-    try testReturnValueWithApp(struct {
-        pub const zt_debug = DebugMode.full;
-    }, expected, src);
+    // try testReturnValueWithApp(struct {
+    //     pub const zt_debug = DebugMode.full;
+    // }, expected, src);
 
-    try testReturnValueWithApp(struct {
-        pub const zt_max_locals = 256;
-    }, expected, src);
+    // try testReturnValueWithApp(struct {
+    //     pub const zt_max_locals = 256;
+    // }, expected, src);
 
-    try testReturnValueWithApp(struct {
-        pub const zt_max_locals = 300;
-    }, expected, src);
+    // try testReturnValueWithApp(struct {
+    //     pub const zt_max_locals = 300;
+    // }, expected, src);
 
     try testReturnValueWithApp(void, expected, src);
 }

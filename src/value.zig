@@ -3,15 +3,17 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const Value = union(enum) {
-    f64: f64,
     i64: i64,
+    f64: f64,
     bool: bool,
     null: void,
+    map: Map,
     array: List,
     string: []const u8,
     property: i32,
 
     pub const List = std.ArrayListUnmanaged(Value);
+    pub const Map = std.HashMapUnmanaged(KeyValue, Value, KeyValue.Context, std.hash_map.default_max_load_percentage);
 
     pub fn from(allocator: Allocator, zig: anytype) !Value {
         const T = @TypeOf(zig);
@@ -88,11 +90,19 @@ pub const Value = union(enum) {
                 }
                 return error.UnsupportedType;
             },
-            .@"struct" => {
+            .@"struct" => |s| {
                 if (T == List) {
                     return .{.array = zig};
                 }
-                return error.UnsupportedType;
+                if (T == Map) {
+                    return .{.map = zig};
+                }
+                var m: Map = .{};
+                try m.ensureTotalCapacity(allocator, s.fields.len);
+                inline for (s.fields) |field| {
+                    m.putAssumeCapacity(.{.string = field.name}, try from(allocator, @field(zig, field.name)));
+                }
+                return .{ .map = m };
             },
             else => return error.UnsupportedType,
         }
@@ -100,7 +110,8 @@ pub const Value = union(enum) {
 
     pub fn deinit(self: *Value, allocator: Allocator) void {
         switch (self.*) {
-            .array => |*arr| arr.deinit(allocator),
+            .map => |*v| v.deinit(allocator),
+            .array => |*v| v.deinit(allocator),
             else => {},
         }
     }
@@ -117,12 +128,29 @@ pub const Value = union(enum) {
                     return writer.writeAll("[]");
                 }
                 try writer.writeByte('[');
-                try std.fmt.format(writer, "{}", .{arr.items[0]});
+                try format(arr.items[0], "", .{}, writer);
                 for (arr.items[1..]) |v| {
                     try writer.writeAll(", ");
-                    try std.fmt.format(writer, "{}", .{v});
+                    try format(v, "", .{}, writer);
                 }
                 try writer.writeByte(']');
+            },
+            .map => |map| {
+                try writer.writeByte('{');
+                var it = map.iterator();
+                if (it.next()) |first| {
+                    try first.key_ptr.format("", .{}, writer);
+                    try writer.writeAll(": ");
+                    try format(first.value_ptr.*, "", .{}, writer);
+
+                    while (it.next()) |kv| {
+                        try writer.writeAll(", ");
+                        try kv.key_ptr.format("", .{}, writer);
+                        try writer.writeAll(": ");
+                        try format(kv.value_ptr.*, "", .{}, writer);
+                    }
+                }
+                try writer.writeByte('}');
             },
         }
     }
@@ -172,6 +200,23 @@ pub const Value = union(enum) {
                 .null => return false,
                 else => {},
             },
+            .map => |l| switch (other) {
+                .map => |r| {
+                    if (l.count() != r.count()) {
+                        return false;
+                    }
+                    var it = l.iterator();
+                    while (it.next()) |kv| {
+                        const rv = r.get(kv.key_ptr.*) orelse return false;
+                        if (try kv.value_ptr.equal(rv) == false) {
+                            return false;
+                        }
+                    }
+                    return true;
+                },
+                .null => return false,
+                else => {},
+            },
             .property => return false,
         }
         return error.Incompatible;
@@ -185,6 +230,7 @@ pub const Value = union(enum) {
             .null => return "null",
             .string => return "string",
             .array => return "array",
+            .map => return "map",
             .property => return "property",
         }
     }
@@ -197,9 +243,46 @@ pub const Value = union(enum) {
             .null => return "null",
             .string => return "a string",
             .array => return "an array",
+            .map => return "a map",
             .property => return "a property",
         }
     }
+};
+
+pub const KeyValue = union(enum) {
+    i64: i64,
+    string: []const u8,
+
+    pub fn format(self: KeyValue, _: []const u8, _: anytype, writer: anytype) !void {
+        switch (self) {
+            .i64, => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
+            .string => |v| try writer.writeAll(v),
+        }
+    }
+
+    const Wyhash = std.hash.Wyhash;
+
+    const Context = struct {
+        pub fn hash(_: Context, key: KeyValue) u64 {
+            switch (key) {
+                .i64 => |v| return Wyhash.hash(0, std.mem.asBytes(&v)),
+                .string => |v| return Wyhash.hash(0, v),
+            }
+        }
+
+        pub fn eql(_: Context, a: KeyValue, b: KeyValue) bool {
+            switch (a) {
+                .i64 => |av| switch (b) {
+                    .i64 => |bv| return av == bv,
+                    .string => return false,
+                },
+                .string => |av| switch (b) {
+                    .string => |bv| return std.mem.eql(u8, av, bv),
+                    .i64 => return false,
+                },
+            }
+        }
+    };
 };
 
 const t = @import("t.zig");
@@ -240,6 +323,15 @@ test "Value: format" {
         .{ .string = "over 9000" },
     };
     try assertFormat("[-3, true, over 9000]", .{ .array = .{ .items = &arr } });
+
+    try assertFormat("{}", .{ .map = .{} });
+
+    var map: Value.Map = .{};
+    defer map.deinit(t.allocator);
+    try map.put(t.allocator, .{.string = "name"}, .{.string = "Leto"});
+    try map.put(t.allocator, .{.i64 = 123}, .{.bool = true});
+    try map.put(t.allocator, .{.string = "arr"}, .{ .array = .{ .items = &arr } });
+    try assertFormat("{123: true, name: Leto, arr: [-3, true, over 9000]}", .{ .map = map });
 }
 
 test "Value: equal" {
@@ -303,6 +395,54 @@ test "Value: equal" {
     try assertEqual(false, .{ .array = .{ .items = &arr1 } }, .{ .array = .{ .items = &arr2 } });
     try assertEqual(false, .{ .array = .{ .items = &arr1 } }, .{ .array = .{ .items = &arr3 } });
     try assertEqual(false, .{ .array = .{ .items = &arr2 } }, .{ .array = .{ .items = &arr3 } });
+    try assertEqual(false, .{ .array = .{ .items = &arr2 } }, .{ .null = {} });
+    try assertEqualIncompatible(.{ .array = .{ .items = &arr2 } }, .{ .i64 = 2 });
+    try assertEqualIncompatible(.{ .array = .{ .items = &arr2 } }, .{ .f64 = -95.11 });
+    try assertEqualIncompatible(.{ .array = .{ .items = &arr2 } }, .{ .string = "hello" });
+    try assertEqualIncompatible(.{ .array = .{ .items = &arr2 } }, .{ .bool = true });
+
+    var map1: Value.Map = .{};
+    defer map1.deinit(t.allocator);
+    try map1.put(t.allocator, .{.string = "name"}, .{.string = "Leto"});
+    try map1.put(t.allocator, .{.i64 = 123}, .{.bool = true});
+    try map1.put(t.allocator, .{.string = "arr"}, .{ .array = .{ .items = &arr1 } });
+
+    var map2: Value.Map = .{};
+    defer map2.deinit(t.allocator);
+    try map2.put(t.allocator, .{.i64 = 123}, .{.bool = true});
+    try map2.put(t.allocator, .{.string = "arr"}, .{ .array = .{ .items = &arr1 } });
+    try map2.put(t.allocator, .{.string = "name"}, .{.string = "Leto"});
+
+    var map3: Value.Map = .{};
+    defer map3.deinit(t.allocator);
+    try map3.put(t.allocator, .{.i64 = 122}, .{.bool = true});  // DIFFERENT KEY
+    try map3.put(t.allocator, .{.string = "arr"}, .{ .array = .{ .items = &arr1 } });
+    try map3.put(t.allocator, .{.string = "name"}, .{.string = "Leto"});
+
+    var map4: Value.Map = .{};
+    defer map4.deinit(t.allocator);
+    try map4.put(t.allocator, .{.i64 = 123}, .{.bool = true});
+    try map4.put(t.allocator, .{.string = "arr"}, .{ .array = .{ .items = &arr1 } });
+    try map4.put(t.allocator, .{.string = "name"}, .{.string = "LETO"}); // DIFFERENT VALUE
+
+    var map5: Value.Map = .{};
+    defer map5.deinit(t.allocator);
+    try map5.put(t.allocator, .{.i64 = 123}, .{.bool = true});
+    try map5.put(t.allocator, .{.string = "arr"}, .{ .array = .{ .items = &arr1 } });
+    try map5.put(t.allocator, .{.string = "name"}, .{.string = "Leto"});
+    try map5.put(t.allocator, .{.string = "other"}, .{.string = "other"}); // extra key
+
+    try assertEqual(true, .{ .map = map1 }, .{ .map = map1 });
+    try assertEqual(true, .{ .map = map1 }, .{ .map = map2 });
+    try assertEqual(false, .{ .map = map1 }, .{ .map = map3 });
+    try assertEqual(false, .{ .map = map2 }, .{ .map = map3 });
+    try assertEqual(false, .{ .map = map1 }, .{ .map = map4 });
+    try assertEqual(false, .{ .map = map1 }, .{ .map = map5 });
+    try assertEqual(false, .{ .map = map1 }, .{ .null = {} });
+    try assertEqualIncompatible(.{ .map = map1 }, .{ .i64 = 2 });
+    try assertEqualIncompatible(.{ .map = map1 }, .{ .f64 = -95.11 });
+    try assertEqualIncompatible(.{ .map = map1 }, .{ .string = "hello" });
+    try assertEqualIncompatible(.{ .map = map1 }, .{ .bool = true });
 }
 
 test "Value: from" {
@@ -385,7 +525,6 @@ test "Value: from" {
         const from = try Value.from(undefined, values);
         try t.expectEqual(values.items.ptr, from.array.items.ptr);
     }
-
 }
 
 fn assertFormat(expected: []const u8, value: Value) !void {
@@ -398,4 +537,8 @@ fn assertFormat(expected: []const u8, value: Value) !void {
 
 fn assertEqual(expected: bool, left: Value, right: Value) !void {
     try t.expectEqual(expected, left.equal(right));
+}
+
+fn assertEqualIncompatible(left: Value, right: Value) !void {
+    try t.expectError(error.Incompatible, left.equal(right));
 }
