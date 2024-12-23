@@ -1,6 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-const MemoryPool = std.heap.MemoryPool;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const Value = @import("value.zig").Value;
@@ -14,10 +14,13 @@ const Allocator = std.mem.Allocator;
 
 const Stack = std.ArrayListUnmanaged(Value);
 
+pub const RefPool = if (builtin.is_test) DebugRefPool else std.heap.MemoryPool(Value.Ref);
+
 pub fn VM(comptime App: type) type {
     const MAX_CALL_FRAMES = config.extract(App, "ztl_max_call_frames");
     return struct {
         _arena: std.heap.ArenaAllocator,
+        _ref_pool: RefPool,
 
         _stack: Stack = .{},
 
@@ -33,12 +36,20 @@ pub fn VM(comptime App: type) type {
 
         pub fn init(allocator: Allocator) Self {
             return .{
+                ._ref_pool = RefPool.init(allocator),
                 ._arena = std.heap.ArenaAllocator.init(allocator),
             };
         }
 
         pub fn deinit(self: *Self) void {
             self._arena.deinit();
+            if (builtin.is_test) {
+                if (self._ref_pool.count != 0) {
+                    std.debug.print("ref pool leak: {d}\n", .{self._ref_pool.count});
+                    @panic("Memory Leak");
+                }
+            }
+            self._ref_pool.deinit();
         }
 
         // See template.zig's hack around globals to see why we're doing this
@@ -65,8 +76,19 @@ pub fn VM(comptime App: type) type {
             // goto to the main script
             ip += 9 + @as(u32, @bitCast(ip[5..9].*));
 
+            const ref_pool = &self._ref_pool;
             const allocator = self._arena.allocator();
-            var ref_allocator = MemoryPool(Value.Ref).init(allocator);
+            errdefer if (comptime builtin.is_test) {
+                // we can skip doing this in non-test since our pool_ref
+                // is an arena which will all get cleaned up when pool_ref.deinit()
+                // is called. But, during tests, since we do our own reference
+                // tracking, we need this cleanup during error cases (only during
+                // error cases, because during non-error cases, this should all
+                // get cleaned up naturally)
+                for (self._stack.items) |value| {
+                    self.release(value);
+                }
+            };
 
             var frames = &self._frames;
             frames[0] = .{
@@ -82,12 +104,16 @@ pub fn VM(comptime App: type) type {
                 const op_code: OpCode = @enumFromInt(ip[0]);
                 ip += 1;
                 switch (op_code) {
-                    .POP => _ = stack.pop().dereference(&ref_allocator),
-                    .PUSH => try stack.append(allocator, stack.getLast().reference()),
+                    .POP => self.release(stack.pop()),
+                    .PUSH => {
+                        const value = stack.getLast();
+                        self.acquire(value);
+                        try stack.append(allocator, value);
+                    },
                     .OUTPUT => {
                         var value = stack.pop();
                         try value.write(writer);
-                        value.dereference(&ref_allocator);
+                        self.release(value);
                     },
                     .CONSTANT_I64 => {
                         const value = @as(i64, @bitCast(ip[0..8].*));
@@ -121,14 +147,17 @@ pub fn VM(comptime App: type) type {
                     },
                     .GET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
-                        try stack.append(allocator, stack.items[frame_pointer + idx].reference());
+                        const value = stack.items[frame_pointer + idx];
+                        self.acquire(value);
+                        try stack.append(allocator, value);
                         ip += SL;
                     },
                     .SET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
                         const current = &stack.items[frame_pointer + idx];
-                        current.dereference(&ref_allocator);
-                        current.* = stack.getLast().reference();
+                        self.release(current.*);
+                        current.* = stack.getLast();
+                        self.acquire(current.*);
                         ip += SL;
                     },
                     .ADD => try self.arithmetic(stack, &add),
@@ -167,7 +196,7 @@ pub fn VM(comptime App: type) type {
                         const len = items.len;
                         const iterator_start = len - value_count;
                         for (items[iterator_start..len]) |*value| {
-                            value.* = try self.toIterator(&ref_allocator, value.*);
+                            value.* = try self.toIterator(ref_pool, value.*);
                         }
 
                         // The first thing our FOREACH_ITERATE is going to do is
@@ -194,7 +223,7 @@ pub fn VM(comptime App: type) type {
                         ip += 1;
 
                         for (0..value_count) |_| {
-                            stack.pop().dereference(&ref_allocator);
+                            self.release(stack.pop());
                         }
 
                         var items = stack.items;
@@ -202,7 +231,7 @@ pub fn VM(comptime App: type) type {
 
                         const iterator_start = items.len - value_count;
                         ITERATE: for (items[iterator_start..len]) |it| {
-                            const value = (try iterateNext(&ref_allocator, it.ref)) orelse {
+                            const value = (try iterateNext(ref_pool, it.ref)) orelse {
                                 stack.appendAssumeCapacity(.{.bool = false});
                                 break :ITERATE;
                             };
@@ -238,7 +267,7 @@ pub fn VM(comptime App: type) type {
                         }
                         if (op_code == .JUMP_IF_FALSE_POP) {
                             // pop the condition result (true/false) off the stack
-                            stack.pop().dereference(&ref_allocator);
+                            self.release(stack.pop());
                         }
                     },
                     .INCR => {
@@ -261,7 +290,7 @@ pub fn VM(comptime App: type) type {
                                 const value_count: u32 = @bitCast(ip[0..4].*);
                                 ip += 4;
 
-                                var ref = try ref_allocator.create();
+                                var ref = try ref_pool.create();
                                 ref.* = .{.value = .{.list = .{}}};
                                 var list = &ref.value.list;
 
@@ -285,7 +314,7 @@ pub fn VM(comptime App: type) type {
                                 const entry_count: u32 = @bitCast(ip[0..4].*);
                                 ip += 4;
 
-                                var ref = try ref_allocator.create();
+                                var ref = try ref_pool.create();
                                 ref.* = .{.value = .{.map = .{}}};
                                 var map = &ref.value.map;
 
@@ -329,7 +358,8 @@ pub fn VM(comptime App: type) type {
                         const target = values[l - 2];
 
                         // replace the array/map with whatever we got
-                        values[l - 2] = try self.getIndexed(&ref_allocator, target, values[last_value_index]);
+                        values[l - 2] = try self.getIndexed(ref_pool, target, values[last_value_index]);
+                        self.release(target);
                         stack.items.len = last_value_index;
                     },
                     .INDEX_SET => {
@@ -353,6 +383,7 @@ pub fn VM(comptime App: type) type {
                         const index = values[l - 2];
                         const incr = values[l - 1];
                         values[l - 3] = try self.incrementIndexed(target, index, incr);
+                        self.release(target);
                         stack.items.len = l - 2;
                     },
                     .CALL => {
@@ -406,7 +437,18 @@ pub fn VM(comptime App: type) type {
                         }
                     },
                     .RETURN => {
-                        const value = if (stack.items.len > 0) stack.pop() else Value{.null = {}};
+                        const value: Value = blk: {
+                            if (stack.items.len == 0) {
+                                break :blk .{.null = {}};
+                            }
+
+                            const v = stack.pop();
+                            for (stack.items) |item| {
+                                self.release(item);
+                            }
+                            break :blk v;
+                        };
+
                         if (frame_count == 0) {
                             return value;
                         }
@@ -576,9 +618,9 @@ pub fn VM(comptime App: type) type {
             return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
         }
 
-        fn getIndexed(self: *Self, ref_allocator: *MemoryPool(Value.Ref), target: Value, index: Value) !Value {
+        fn getIndexed(self: *Self, ref_pool: *RefPool, target: Value, index: Value) !Value {
             switch (index) {
-                .i64 => |n| return self.getNumericIndex(ref_allocator, target, n),
+                .i64 => |n| return self.getNumericIndex(ref_pool, target, n),
                 .property => |n| return self.getProperty(target, n),
                 .string => |n| return self.getStringIndex(target, n),
                 else => {},
@@ -586,8 +628,8 @@ pub fn VM(comptime App: type) type {
             return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()});
         }
 
-        fn getNumericIndex(self: *Self, ref_allocator: *MemoryPool(Value.Ref), target: Value, index: i64) !Value {
-            _ = ref_allocator;
+        fn getNumericIndex(self: *Self, ref_pool: *RefPool, target: Value, index: i64) !Value {
+            _ = ref_pool;
             switch (target) {
                 .string => |str| {
                     const actual_index = try self.resolveScalarIndex(str.len, index);
@@ -648,10 +690,12 @@ pub fn VM(comptime App: type) type {
                     .list => |*list| {
                         const len = list.items.len;
                         const actual_index = try self.resolveScalarIndex(len, index);
-                        list.items[actual_index] = value;
+                        const slot = &list.items[actual_index];
+                        self.release(slot.*);
+                        slot.* = value;
                         return;
                     },
-                    .map => |*map| return map.put(allocator, .{.i64 = index}, value),
+                    .map => |*map| return self.setMapIndex(allocator, map, .{.i64 = index}, value),
                     else => {},
                 },
                 else => {},
@@ -662,12 +706,20 @@ pub fn VM(comptime App: type) type {
         fn setStringIndex(self: *Self, allocator: Allocator, target: Value, index: []const u8, value: Value) !void {
             switch (target) {
                 .ref => |ref| switch (ref.value) {
-                    .map => |*map| return map.put(allocator, .{.string = index}, value),
+                    .map => |*map| return self.setMapIndex(allocator, map, .{.string = index}, value),
                     else => {},
                 },
                 else => {},
             }
             return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()});
+        }
+
+        fn setMapIndex(self: *Self, allocator: Allocator, map: *Value.Map, key: KeyValue, value: Value) !void {
+            const gop = try map.getOrPut(allocator, key);
+            if (gop.found_existing) {
+                self.release(gop.value_ptr.*);
+            }
+            gop.value_ptr.* = value;
         }
 
         fn incrementIndexed(self: *Self, target: Value, index: Value, incr: Value) !Value {
@@ -733,16 +785,16 @@ pub fn VM(comptime App: type) type {
             return @intCast(abs_index);
         }
 
-        fn toIterator(self: *Self, ref_allocator: *MemoryPool(Value.Ref), value: Value) !Value {
+        fn toIterator(self: *Self, ref_pool: *RefPool, value: Value) !Value {
             switch (value) {
                 .ref => |ref| switch (ref.value) {
                     .list => |*list| {
-                        const new_ref = try ref_allocator.create();
+                        const new_ref = try ref_pool.create();
                         new_ref.* = .{.value = .{.list_iterator = .{.index = 0, .list = list, .ref = ref}}};
                         return .{.ref = new_ref};
                     },
                     .map => |map| {
-                        const new_ref = try ref_allocator.create();
+                        const new_ref = try ref_pool.create();
                         new_ref.* = .{.value = .{.map_iterator = .{.inner = map.iterator(), .ref = ref}}};
                         return .{.ref = new_ref};
                     },
@@ -753,7 +805,7 @@ pub fn VM(comptime App: type) type {
             return self.setErrorFmt(error.TypeError, "Cannot iterate over {s}", .{value.friendlyArticleName()});
         }
 
-        fn iterateNext(ref_allocator: *MemoryPool(Value.Ref), ref: *Value.Ref) !?Value {
+        fn iterateNext(ref_pool: *RefPool, ref: *Value.Ref) !?Value {
             switch (ref.value) {
                 .list_iterator => |*it| {
                     const index = it.index;
@@ -766,14 +818,13 @@ pub fn VM(comptime App: type) type {
                 },
                 .map_iterator => |*it| {
                     const entry = it.inner.next() orelse return null;
-                    const new_ref = try ref_allocator.create();
+                    const new_ref = try ref_pool.create();
                     new_ref.* = .{.value = .{.map_entry = entry}};
                     return .{.ref = new_ref};
                 },
                 else => unreachable,
             }
         }
-
 
         fn setErrorFmt(self: *Self, err: anyerror, comptime fmt: []const u8, args: anytype) anyerror {
             self.err = .{
@@ -790,6 +841,40 @@ pub fn VM(comptime App: type) type {
             };
             return err;
         }
+
+        pub fn createRef(self: *Self) !*Value.Ref {
+            return self._ref_pool.create();
+        }
+
+        pub fn acquire(_: *const Self, value: Value) void {
+            switch (value) {
+                .ref => |ref| ref.count += 1,
+                else => {},
+            }
+        }
+
+        pub fn release(self: *Self, value: Value) void {
+            if (value != .ref) {
+                return;
+            }
+            self.releaseRef(value.ref);
+        }
+
+        fn releaseRef(self: *Self, ref: *Value.Ref) void {
+            const count = ref.count;
+            if (count > 1) {
+                ref.count = count - 1;
+                return;
+            }
+
+            switch (ref.value) {
+                .map_iterator => |it| self.releaseRef(it.ref),
+                .list_iterator => |it| self.releaseRef(it.ref),
+                else => {},
+            }
+
+            self._ref_pool.destroy(ref);
+        }
     };
 }
 
@@ -801,4 +886,29 @@ const Frame = struct {
 pub const Error = struct {
     err: anyerror,
     desc: []const u8,
+};
+
+const DebugRefPool = struct {
+    count: usize,
+    pool: std.heap.MemoryPool(Value.Ref),
+
+    fn init(allocator: Allocator) DebugRefPool {
+        return .{
+            .count = 0,
+            .pool = std.heap.MemoryPool(Value.Ref).init(allocator),
+        };
+    }
+    fn deinit(self: *DebugRefPool) void {
+        self.pool.deinit();
+    }
+
+    pub fn create(self: *DebugRefPool) !*Value.Ref {
+        self.count += 1;
+        return self.pool.create();
+    }
+
+    pub fn destroy(self: *DebugRefPool, ref: *Value.Ref) void {
+        self.count -= 1;
+        self.pool.destroy(ref);
+    }
 };

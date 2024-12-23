@@ -1,7 +1,8 @@
 const std = @import("std");
 
+const RefPool = @import("vm.zig").RefPool;
+
 const Allocator = std.mem.Allocator;
-const MemoryPool = std.heap.MemoryPool;
 
 pub const Value = union(enum) {
     pub const List = std.ArrayListUnmanaged(Value);
@@ -24,21 +25,6 @@ pub const Value = union(enum) {
             map_iterator: MapIterator,
             list_iterator: ListIterator,
         },
-
-        fn dereference(self: *Ref, ref_allocator: *MemoryPool(Value.Ref)) void {
-            const count = self.count;
-            if (count > 1) {
-                self.count = count - 1;
-                return;
-            }
-
-            switch (self.value) {
-                .map_iterator => |it| it.ref.dereference(ref_allocator),
-                .list_iterator => |it| it.ref.dereference(ref_allocator),
-                else => {},
-            }
-            ref_allocator.destroy(self);
-        }
     };
 
     pub fn format(self: Value, _: []const u8, _: anytype, writer: anytype) !void {
@@ -172,21 +158,6 @@ pub const Value = union(enum) {
             },
         }
         return error.Incompatible;
-    }
-
-    pub fn reference(self: Value) Value {
-        switch (self) {
-            .ref => |ref| ref.count += 1,
-            else => {},
-        }
-        return self;
-    }
-
-    pub fn dereference(self: Value, ref_allocator: *MemoryPool(Value.Ref)) void {
-        if (self != .ref) {
-            return;
-        }
-        self.ref.dereference(ref_allocator);
     }
 
     pub fn friendlyName(self: Value) []const u8 {

@@ -594,7 +594,7 @@ test {
     );
 }
 
- test "ztl: array initialization" {
+ test "ztl: list initialization" {
     defer t.reset();
 
     {
@@ -624,7 +624,7 @@ test {
     }
 }
 
- test "ztl: array indexing" {
+ test "ztl: list indexing" {
     try testReturnValue(.{ .i64 = 10 }, "return [10, 2002, 5][0];");
     try testReturnValue(.{ .i64 = 2002 }, "return [10, 2002, 5][1];");
     try testReturnValue(.{ .i64 = 5 }, "return [10, 2002, 5][2];");
@@ -639,7 +639,7 @@ test {
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return [1,2][-3];");
 }
 
- test "ztl: array assignment" {
+ test "ztl: list assignment" {
     defer t.reset();
 
     try testReturnValue(.{ .i64 = 10 },
@@ -714,6 +714,13 @@ test {
     try testReturnValue(.{ .i64 = 8 },
         \\ var arr = [0, 7, 2];
         \\ return arr[1]++;
+    );
+
+    // important to test that the inner array is properly released
+    try testReturnValue(.{ .i64 = 2 },
+        \\ var arr = [[1]];
+        \\ arr[0] = 2;
+        \\ return arr[0];
     );
 
     try testRuntimeError("Index out of range. Index: 0, Len: 0", "[][0] = 1;");
@@ -811,9 +818,25 @@ test {
         \\ var map = %{"count": 7};
         \\ return map["count"]++;
     );
+
+    // important to test that the inner array is properly released
+    // with int key
+    try testReturnValue(.{ .i64 = 5 },
+        \\ var map = %{123: [2]};
+        \\ map[123] = 5;
+        \\ return map[123];
+    );
+
+    // important to test that the inner array is properly released
+    // with string key
+    try testReturnValue(.{ .i64 = 4 },
+        \\ var map = %{"count": [2]};
+        \\ map["count"] = 4;
+        \\ return map["count"];
+    );
 }
 
- test "ztl: array length" {
+ test "ztl: list length" {
     try testReturnValue(.{ .i64 = 0 }, "return [].len;");
 }
 
@@ -1126,7 +1149,7 @@ test {
     );
 }
 
- test "ztl: array references" {
+ test "ztl: list references" {
     try testReturnValue(.{ .i64 = 9 },
         \\ var total = [1];
         \\ {
@@ -1258,6 +1281,7 @@ fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) 
         disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
         return err;
     };
+    defer vm.release(value);
 
     const is_equal = expected.equal(value) catch false;
     if (is_equal == false) {
@@ -1293,7 +1317,7 @@ fn testRuntimeError(expected: []const u8, src: []const u8) !void {
 
     const byte_code = try c.byteCode(t.allocator);
     defer t.allocator.free(byte_code);
-    // disassemble({}, byte_code, std.io.getStdErr().writer()) catch unreachable;
+    // disassemble({}, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
     var vm = VM(void).init(t.allocator);
     defer vm.deinit();
