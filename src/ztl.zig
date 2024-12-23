@@ -36,7 +36,7 @@ test {
     std.testing.refAllDecls(@This());
 }
 
- test "ztl: local limit" {
+test "ztl: local limit" {
     blk: {
         var c = Compiler(struct {
             pub const ztl_max_locals = 3;
@@ -68,7 +68,7 @@ test {
     }
 }
 
- test "ztl: arithmetic" {
+test "ztl: arithmetic" {
     try testReturnValue(.{ .i64 = 9 }, "return 1 + 8;");
     try testReturnValue(.{ .i64 = -1 }, "return 10 - 11;");
     try testReturnValue(.{ .i64 = 14 }, "return 2 * 7;");
@@ -92,12 +92,12 @@ test {
     try testReturnValue(.{ .f64 = 0.7843137254901962 }, "return 4 / 5.1;");
 }
 
- test "ztl: not" {
+test "ztl: not" {
     try testReturnValue(.{ .bool = true }, "return !false;");
     try testReturnValue(.{ .bool = false }, "return !true;");
 }
 
- test "ztl: comparison int" {
+test "ztl: comparison int" {
     try testReturnValue(.{ .bool = true }, "return 1 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1 == 2;");
     try testReturnValue(.{ .bool = false }, "return 1 != 1;");
@@ -120,7 +120,7 @@ test {
     try testReturnValue(.{ .bool = false }, "return 2 <= 1;");
 }
 
- test "ztl: comparison float" {
+test "ztl: comparison float" {
     try testReturnValue(.{ .bool = true }, "return 1.13 == 1.13;");
     try testReturnValue(.{ .bool = false }, "return 1.13 == 2.08;");
     try testReturnValue(.{ .bool = false }, "return 1.13 != 1.13;");
@@ -143,7 +143,7 @@ test {
     try testReturnValue(.{ .bool = false }, "return 2.08 <= 1.13;");
 }
 
- test "ztl: comparison int - float" {
+test "ztl: comparison int - float" {
     try testReturnValue(.{ .bool = true }, "return 1 == 1.0;");
     try testReturnValue(.{ .bool = false }, "return 1 == 1.1;");
     try testReturnValue(.{ .bool = false }, "return 1 != 1.0;");
@@ -166,7 +166,7 @@ test {
     try testReturnValue(.{ .bool = false }, "return 2 <= 1.99;");
 }
 
- test "ztl: comparison float - int" {
+test "ztl: comparison float - int" {
     try testReturnValue(.{ .bool = true }, "return 1.0 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1.1 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1.0 != 1;");
@@ -189,7 +189,7 @@ test {
     try testReturnValue(.{ .bool = false }, "return 10.1 <= 10;");
 }
 
- test "ztl: comparison bool" {
+test "ztl: comparison bool" {
     try testReturnValue(.{ .bool = true }, "return true == true;");
     try testReturnValue(.{ .bool = true }, "return false == false;");
     try testReturnValue(.{ .bool = false }, "return true == false;");
@@ -201,7 +201,7 @@ test {
     try testReturnValue(.{ .bool = true }, "return false != true;");
 }
 
- test "ztl: comparison null" {
+test "ztl: comparison null" {
     try testReturnValue(.{ .bool = true }, "return null == null;");
     try testReturnValue(.{ .bool = false }, "return null != null;");
 
@@ -224,7 +224,7 @@ test {
     try testReturnValue(.{ .bool = true }, "return false != null;");
 }
 
- test "ztl: comparison string" {
+test "ztl: comparison string" {
     try testReturnValue(.{ .bool = true }, "return `abc` == `abc`;");
     try testReturnValue(.{ .bool = false }, "return `abc` == `123`;");
     try testReturnValue(.{ .bool = false }, "return `abc` == `ABC`;");
@@ -249,7 +249,7 @@ test {
     try testReturnValue(.{ .bool = false }, "return `ABC` >= `abc`;");
 }
 
- test "ztl: increment/decrement" {
+test "ztl: increment/decrement" {
     try testReturnValue(.{ .i64 = 4 },
         \\ var i = 0;
         \\ i++;
@@ -291,7 +291,7 @@ test {
     try testError("Expected semicolon (';'), got '++' (PLUS_PLUS)", "return 100++;");
 }
 
- test "ztl: variables" {
+test "ztl: variables" {
     defer t.reset();
 
     try testReturnValue(.{.string = "Leto"},
@@ -343,7 +343,7 @@ test {
     try testError("Identifier \"" ++ "a" ** 128 ++ "\" exceeds the character limit of 127", "var " ++ "a" ** 128 ++ " = null;");
 }
 
- test "ztl: if" {
+test "ztl: if" {
     // try testReturnValue(.{ .i64 = 1234 },
     //     \\ if (true) {
     //     \\   return 1234;
@@ -405,7 +405,7 @@ test {
     );
 }
 
- test "ztl: logical operators" {
+test "ztl: logical operators" {
     try testReturnValue(.{ .bool = false }, "return 1 == 1 and 3 == 2;");
     try testReturnValue(.{ .bool = false }, "return 0 == 1 and 3 == 2;");
     try testReturnValue(.{ .bool = false }, "return 1 == 3 or 3 == 4;");
@@ -415,7 +415,7 @@ test {
     try testReturnValue(.{ .bool = false }, "return 1 == 3 and (3 == 4 or 4 == 4);");
 }
 
- test "ztl: while" {
+test "ztl: while" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var i = 0;
         \\ while (i < 10) {
@@ -433,7 +433,7 @@ test {
     );
 }
 
- test "ztl: for" {
+test "ztl: for" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var i = 0;
         \\ for (var x = 0; x < 10; x = x + 1) {
@@ -485,11 +485,11 @@ test {
     );
 }
 
- test "ztl: empty scope" {
+test "ztl: empty scope" {
     try testReturnValue(.{ .null = {} }, "{} return null;"); // doesn't crash, yay!
 }
 
- test "ztl: functions" {
+test "ztl: functions" {
     try testReturnValue(.{ .i64 = 25 },
         \\ return value(3);
         \\
@@ -578,7 +578,7 @@ test {
     );
 }
 
- test "ztl: variable scopes" {
+test "ztl: variable scopes" {
     try testReturnValue(.{ .i64 = 100 },
         \\ var i = 0;
         \\ var count = 0;
@@ -594,7 +594,7 @@ test {
     );
 }
 
- test "ztl: list initialization" {
+test "ztl: list initialization" {
     defer t.reset();
 
     {
@@ -624,7 +624,7 @@ test {
     }
 }
 
- test "ztl: list indexing" {
+test "ztl: list indexing" {
     try testReturnValue(.{ .i64 = 10 }, "return [10, 2002, 5][0];");
     try testReturnValue(.{ .i64 = 2002 }, "return [10, 2002, 5][1];");
     try testReturnValue(.{ .i64 = 5 }, "return [10, 2002, 5][2];");
@@ -639,7 +639,7 @@ test {
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return [1,2][-3];");
 }
 
- test "ztl: list assignment" {
+test "ztl: list assignment" {
     defer t.reset();
 
     try testReturnValue(.{ .i64 = 10 },
@@ -729,7 +729,7 @@ test {
     try testRuntimeError("Index out of range. Index: -2, Len: 1", "[1][-2] = 1;");
 }
 
- test "ztl: map initialization" {
+test "ztl: map initialization" {
     defer t.reset();
 
     {
@@ -761,7 +761,7 @@ test {
     }
 }
 
- test "ztl: map indexing" {
+test "ztl: map indexing" {
     try testReturnValue(.{ .i64 = 1 }, "return %{a: 1}[`a`];");
     try testReturnValue(.{ .null = {} }, "return %{a: 1}[`b`];");
     try testReturnValue(.{ .null = {} }, "return %{a: 1}[123];");
@@ -775,7 +775,7 @@ test {
     );
 }
 
- test "ztl: map assignment" {
+test "ztl: map assignment" {
     defer t.reset();
 
     try testReturnValue(.{ .i64 = 10 },
@@ -836,11 +836,11 @@ test {
     );
 }
 
- test "ztl: list length" {
+test "ztl: list length" {
     try testReturnValue(.{ .i64 = 0 }, "return [].len;");
 }
 
- test "ztl: string indexing" {
+test "ztl: string indexing" {
     defer t.reset();
 
     try testReturnValue(.{.string = "a"}, "return `abc`[0];");
@@ -857,7 +857,7 @@ test {
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return `ab`[-3];");
 }
 
- test "ztl: invalid type indexing" {
+test "ztl: invalid type indexing" {
     try testRuntimeError("Cannot index an integer", "return 0[0];");
     try testRuntimeError("Cannot index a float", "return 12.3[-1];");
     try testRuntimeError("Cannot index a boolean", "return true[0];");
@@ -870,7 +870,7 @@ test {
     try testRuntimeError("Invalid index or property type, got a list", "return [][[]];");
 }
 
- test "ztl: orelse" {
+test "ztl: orelse" {
     defer t.reset();
 
     try testReturnValue(.{ .i64 = 4 }, "return 4 orelse 1;");
@@ -880,7 +880,7 @@ test {
     try testReturnValue(.{ .i64 = 1 }, "return 1 orelse null orelse null orelse `hi`;");
 }
 
- test "ztl: string dedupe" {
+test "ztl: string dedupe" {
     defer t.reset();
 
     try testReturnValueWithApp(
@@ -900,7 +900,7 @@ test {
     );
 }
 
- test "ztl: break while" {
+test "ztl: break while" {
     try testReturnValue(.{ .i64 = 4 },
         \\ var i = 0;
         \\ while (i < 10) {
@@ -953,7 +953,7 @@ test {
     );
 }
 
- test "ztl: break for" {
+test "ztl: break for" {
     try testReturnValue(.{ .i64 = 4 },
         \\ var i = 0;
         \\ for (; i < 10; i++) {
@@ -991,7 +991,7 @@ test {
     );
 }
 
- test "ztl: continue while" {
+test "ztl: continue while" {
     try testReturnValue(.{ .i64 = 5 },
         \\ var i = 0;
         \\ var count = 0;
@@ -1036,7 +1036,7 @@ test {
     );
 }
 
- test "ztl: continue for" {
+test "ztl: continue for" {
     try testReturnValue(.{ .i64 = 15 },
         \\ var count = 0;
         \\ for (var i = 0; i < 10; i++) {
@@ -1080,7 +1080,7 @@ test {
     );
 }
 
- test "ztl: break invalid" {
+test "ztl: break invalid" {
     try testError("'break' cannot be used outside of loop", "break;");
 
     try testError("'break' cannot be used outside of loop",
@@ -1106,7 +1106,7 @@ test {
     );
 }
 
- test "ztl: continue invalid" {
+test "ztl: continue invalid" {
     try testError("'continue' cannot be used outside of loop", "continue;");
 
     try testError("'continue' cannot be used outside of loop",
@@ -1132,7 +1132,7 @@ test {
     );
 }
 
- test "ztl: ternary" {
+test "ztl: ternary" {
     try testReturnValue(.{ .i64 = 1 }, "return true ? 1 : 10;");
     try testReturnValue(.{ .i64 = 10 }, "return false ? 1 : 10;");
 
@@ -1149,7 +1149,7 @@ test {
     );
 }
 
- test "ztl: list references" {
+test "ztl: list references" {
     try testReturnValue(.{ .i64 = 9 },
         \\ var total = [1];
         \\ {
@@ -1160,7 +1160,7 @@ test {
     );
 }
 
- test "ztl: foreach" {
+test "ztl: foreach" {
     try testReturnValue(.{ .i64 = 5 },
         \\ var total = 5;
         \\ foreach([]) |item| {
@@ -1237,6 +1237,15 @@ test {
         \\   }
         \\ }
         \\ return total;
+    );
+}
+
+test "ztl: stack overflow" {
+    try testRuntimeError("Maximum call depth (255) reached",
+        \\ fn overflow() {
+        \\   overflow();
+        \\ }
+        \\ overflow();
     );
 }
 

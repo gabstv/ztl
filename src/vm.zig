@@ -408,6 +408,11 @@ pub fn VM(comptime App: type) type {
                         // Push a new frame. This is the functiont that we're
                         // going to be executing.
                         frame_count += 1;
+
+                        if (frame_count == frames.len) {
+                            return self.setErrorFmt(error.StackOverflow, "Maximum call depth ({d}) reached", .{ frames.len });
+                        }
+
                         frames[frame_count] = .{
                             .ip = ip,
                             .frame_pointer = frame_pointer,
