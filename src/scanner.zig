@@ -5,25 +5,6 @@ const Allocator = std.mem.Allocator;
 
 const Position = zt.Position;
 
-const AND_BIT = @as(u24, @bitCast([3]u8{ 'a', 'n', 'd' }));
-const BREAK_BIT = @as(u40, @bitCast([5]u8{ 'b', 'r', 'e', 'a', 'k' }));
-const CONTINUE_BIT = @as(u64, @bitCast([8]u8{ 'c', 'o', 'n', 't', 'i', 'n', 'u', 'e' }));
-const ELSE_BIT = @as(u32, @bitCast([4]u8{ 'e', 'l', 's', 'e' }));
-const FALSE_BIT = @as(u40, @bitCast([5]u8{ 'f', 'a', 'l', 's', 'e' }));
-const FN_BIT = @as(u16, @bitCast([2]u8{ 'f', 'n' }));
-const FOREACH_BIT = @as(u56, @bitCast([7]u8{ 'f', 'o', 'r', 'e', 'a', 'c', 'h' }));
-const FOR_BIT = @as(u24, @bitCast([3]u8{ 'f', 'o', 'r' }));
-const IF_BIT = @as(u16, @bitCast([2]u8{ 'i', 'f' }));
-const NULL_BIT = @as(u32, @bitCast([4]u8{ 'n', 'u', 'l', 'l' }));
-const OR_BIT = @as(u16, @bitCast([2]u8{ 'o', 'r' }));
-const ORELSE_BIT = @as(u48, @bitCast([6]u8{ 'o', 'r', 'e', 'l', 's', 'e' }));
-const PRINT_BIT = @as(u40, @bitCast([5]u8{ 'p', 'r', 'i', 'n', 't' }));
-const RETURN_BIT = @as(u48, @bitCast([6]u8{ 'r', 'e', 't', 'u', 'r', 'n' }));
-const TRUE_BIT = @as(u32, @bitCast([4]u8{ 't', 'r', 'u', 'e' }));
-const VAR_BIT = @as(u24, @bitCast([3]u8{ 'v', 'a', 'r' }));
-const VOID_BIT = @as(u32, @bitCast([4]u8{ 'v', 'o', 'i', 'd' }));
-const WHILE_BIT = @as(u40, @bitCast([5]u8{ 'w', 'h', 'i', 'l', 'e'}));
-
 const ScanError = error{
     ScanError,
     OutOfMemory,
@@ -359,42 +340,42 @@ pub const Scanner = struct {
 
         switch (value.len) {
             2 => switch (@as(u16, @bitCast(value[0..2].*))) {
-                FN_BIT => return self.createSimpleToken("FN", value),
-                IF_BIT => return self.createSimpleToken("IF", value),
-                OR_BIT => return self.createSimpleToken("OR", value),
+                asUint("fn") => return self.createSimpleToken("FN", value),
+                asUint("if") => return self.createSimpleToken("IF", value),
+                asUint("or") => return self.createSimpleToken("OR", value),
                 else => {},
             },
             3 => switch (@as(u24, @bitCast(value[0..3].*))) {
-                AND_BIT => return self.createSimpleToken("AND", value),
-                VAR_BIT => return self.createSimpleToken("VAR", value),
-                FOR_BIT => return self.createSimpleToken("FOR", value),
+                asUint("and") => return self.createSimpleToken("AND", value),
+                asUint("var") => return self.createSimpleToken("VAR", value),
+                asUint("for") => return self.createSimpleToken("FOR", value),
                 else => {},
             },
             4 => switch (@as(u32, @bitCast(value[0..4].*))) {
-                ELSE_BIT => return self.createSimpleToken("ELSE", value),
-                NULL_BIT => return self.createSimpleToken("NULL", value),
-                TRUE_BIT => return self.createToken(.{ .BOOLEAN = true }, value),
-                VOID_BIT => return self.createSimpleToken("VOID", value),
+                asUint("else") => return self.createSimpleToken("ELSE", value),
+                asUint("null") => return self.createSimpleToken("NULL", value),
+                asUint("true") => return self.createToken(.{ .BOOLEAN = true }, value),
+                asUint("void") => return self.createSimpleToken("VOID", value),
                 else => {},
             },
             5 => switch (@as(u40, @bitCast(value[0..5].*))) {
-                FALSE_BIT => return self.createToken(.{ .BOOLEAN = false }, value),
-                WHILE_BIT => return self.createSimpleToken("WHILE", value),
-                PRINT_BIT => return self.createSimpleToken("PRINT", value),
-                BREAK_BIT => return self.createSimpleToken("BREAK", value),
+                asUint("false") => return self.createToken(.{ .BOOLEAN = false }, value),
+                asUint("while") => return self.createSimpleToken("WHILE", value),
+                asUint("print") => return self.createSimpleToken("PRINT", value),
+                asUint("break") => return self.createSimpleToken("BREAK", value),
                 else => {},
             },
             6 => switch (@as(u48, @bitCast(value[0..6].*))) {
-                RETURN_BIT => return self.createSimpleToken("RETURN", value),
-                ORELSE_BIT => return self.createSimpleToken("ORELSE", value),
+                asUint("return") => return self.createSimpleToken("RETURN", value),
+                asUint("orelse") => return self.createSimpleToken("ORELSE", value),
                 else => {},
             },
             7 => switch (@as(u56, @bitCast(value[0..7].*))) {
-                FOREACH_BIT => return self.createSimpleToken("FOREACH", value),
+                asUint("foreach") => return self.createSimpleToken("FOREACH", value),
                 else => {},
             },
             8 => switch (@as(u64, @bitCast(value[0..8].*))) {
-                CONTINUE_BIT => return self.createSimpleToken("CONTINUE", value),
+                asUint("continue") => return self.createSimpleToken("CONTINUE", value),
                 else => {},
             },
             else => {},
