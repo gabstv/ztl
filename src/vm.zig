@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const MemoryPool = std.heap.MemoryPool;
+const ArenaAllocator = std.heap.ArenaAllocator;
+
 const Value = @import("value.zig").Value;
 const KeyValue = @import("value.zig").KeyValue;
 
@@ -34,7 +37,7 @@ pub fn VM(comptime App: type) type {
             };
         }
 
-        pub fn deinit(self: Self) void {
+        pub fn deinit(self: *Self) void {
             self._arena.deinit();
         }
 
@@ -63,6 +66,7 @@ pub fn VM(comptime App: type) type {
             ip += 9 + @as(u32, @bitCast(ip[5..9].*));
 
             const allocator = self._arena.allocator();
+            var ref_allocator = MemoryPool(Value.Ref).init(allocator);
 
             var frames = &self._frames;
             frames[0] = .{
@@ -78,9 +82,13 @@ pub fn VM(comptime App: type) type {
                 const op_code: OpCode = @enumFromInt(ip[0]);
                 ip += 1;
                 switch (op_code) {
-                    .POP => _ = stack.pop(),
-                    .PUSH => try stack.append(allocator, stack.getLast()),
-                    .OUTPUT => try stack.pop().format("", .{}, writer),
+                    .POP => _ = stack.pop().dereference(&ref_allocator),
+                    .PUSH => try stack.append(allocator, stack.getLast().reference()),
+                    .OUTPUT => {
+                        var value = stack.pop();
+                        try value.write(writer);
+                        value.dereference(&ref_allocator);
+                    },
                     .CONSTANT_I64 => {
                         const value = @as(i64, @bitCast(ip[0..8].*));
                         try stack.append(allocator, .{ .i64 = value });
@@ -113,12 +121,14 @@ pub fn VM(comptime App: type) type {
                     },
                     .GET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
-                        try stack.append(allocator, stack.items[frame_pointer + idx]);
+                        try stack.append(allocator, stack.items[frame_pointer + idx].reference());
                         ip += SL;
                     },
                     .SET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
-                        stack.items[frame_pointer + idx] = stack.getLast();
+                        const current = &stack.items[frame_pointer + idx];
+                        current.dereference(&ref_allocator);
+                        current.* = stack.getLast().reference();
                         ip += SL;
                     },
                     .ADD => try self.arithmetic(stack, &add),
@@ -144,6 +154,63 @@ pub fn VM(comptime App: type) type {
                     .EQUAL => try self.comparison(stack, &equal),
                     .GREATER => try self.comparison(stack, &greater),
                     .LESSER => try self.comparison(stack, &lesser),
+                    .FOREACH => {
+                        const value_count = ip[0];
+                        ip += 1;
+
+                        // * 2 because we're going to be holding both the iterator and the value being iterated in
+                        // + 1 for the true/false we inject after every FOREACH_ITERATE
+                        try stack.ensureUnusedCapacity(allocator, (2 * value_count) + 1);
+
+                        var items = stack.items;
+
+                        const len = items.len;
+                        const iterator_start = len - value_count;
+                        for (items[iterator_start..len]) |*value| {
+                            value.* = try self.toIterator(&ref_allocator, value.*);
+                        }
+
+                        // The first thing our FOREACH_ITERATE is going to do is
+                        // pop off the values. On the first iteration, this makes
+                        // no sense, but on subsequent iteration, we need to remove
+                        // the previous iteration values.
+                        // We could do this more cleanly by having the compiler
+                        // issue a POP for each variable. But this is faster.
+                        for (0..value_count) |_| {
+                            stack.appendAssumeCapacity(.{.null = {}});
+                        }
+
+                        // Above, we store the iterator in the stack where the value
+                        // being iterated was. This keeps our stack neat, and aligns
+                        // with the indexes our compiler generates, but it means that
+                        // when we pop off the scope of the foreach, we'll only be
+                        // popping off the iterators, and not the values that they replaced.
+                        // For this reasons, our iterators have a reference to their underlying
+                        // Value.REf, and when they are popped off, they also derefence the
+                        // underlying value.s
+                    },
+                    .FOREACH_ITERATE => {
+                        const value_count = ip[0];
+                        ip += 1;
+
+                        for (0..value_count) |_| {
+                            stack.pop().dereference(&ref_allocator);
+                        }
+
+                        var items = stack.items;
+                        const len = items.len;
+
+                        const iterator_start = items.len - value_count;
+                        ITERATE: for (items[iterator_start..len]) |it| {
+                            const value = (try iterateNext(&ref_allocator, it.ref)) orelse {
+                                stack.appendAssumeCapacity(.{.bool = false});
+                                break :ITERATE;
+                            };
+                            stack.appendAssumeCapacity(value);
+                        } else {
+                            stack.appendAssumeCapacity(.{.bool = true});
+                        }
+                    },
                     .JUMP => {
                         // really??
                         const relative: i16 = @bitCast(ip[0..2].*);
@@ -171,7 +238,7 @@ pub fn VM(comptime App: type) type {
                         }
                         if (op_code == .JUMP_IF_FALSE_POP) {
                             // pop the condition result (true/false) off the stack
-                            _ = stack.pop();
+                            stack.pop().dereference(&ref_allocator);
                         }
                     },
                     .INCR => {
@@ -193,34 +260,41 @@ pub fn VM(comptime App: type) type {
                             .ARRAY => {
                                 const value_count: u32 = @bitCast(ip[0..4].*);
                                 ip += 4;
+
+                                var ref = try ref_allocator.create();
+                                ref.* = .{.value = .{.list = .{}}};
+                                var list = &ref.value.list;
+
                                 if (value_count == 0) {
-                                    try stack.append(allocator, .{ .array = .{} });
+                                    try stack.append(allocator, .{ .ref = ref });
                                 } else {
                                     std.debug.assert(stack.items.len >= value_count);
-
-                                    var arr: Value.List = .{};
-                                    try arr.ensureTotalCapacity(allocator, value_count);
+                                    try list.ensureTotalCapacity(allocator, value_count);
 
                                     var items = stack.items;
                                     for (items[items.len - value_count ..]) |v| {
-                                        arr.appendAssumeCapacity(v);
+                                        list.appendAssumeCapacity(v);
                                     }
                                     stack.items.len = items.len - value_count;
                                     // we popped at least 1 value off the stack, there
                                     // has to be space for our array
-                                    stack.appendAssumeCapacity(.{ .array = arr });
+                                    stack.appendAssumeCapacity(.{ .ref = ref });
                                 }
                             },
                             .MAP => {
                                 const entry_count: u32 = @bitCast(ip[0..4].*);
                                 ip += 4;
+
+                                var ref = try ref_allocator.create();
+                                ref.* = .{.value = .{.map = .{}}};
+                                var map = &ref.value.map;
+
                                 if (entry_count == 0) {
-                                    try stack.append(allocator, .{.map = .{}});
+                                    try stack.append(allocator, .{.ref = ref});
                                 } else {
                                     // * 2 since every entry is made up of a key and a value
                                     std.debug.assert(stack.items.len >= entry_count * 2);
 
-                                    var map: Value.Map = .{};
                                     try map.ensureTotalCapacity(allocator, entry_count);
 
                                     const items = stack.items;
@@ -229,8 +303,8 @@ pub fn VM(comptime App: type) type {
                                     var i = first_index;
                                     while (i < items.len) {
                                         const key: KeyValue = switch (items[i]) {
-                                            .string => |v| .{.string = v},
                                             .i64 => |v| .{.i64 = v},
+                                            .string => |v| .{.string = v},
                                             else => return error.InvalidKeyType,
                                         };
                                         map.putAssumeCapacity(key, items[i + 1]);
@@ -239,7 +313,7 @@ pub fn VM(comptime App: type) type {
                                     stack.items.len = first_index;
                                     // we popped at least 2 values off the stack, there
                                     // has to be space for our map
-                                    stack.appendAssumeCapacity(.{ .map = map });
+                                    stack.appendAssumeCapacity(.{ .ref = ref });
                                 }
                             },
                         }
@@ -253,8 +327,9 @@ pub fn VM(comptime App: type) type {
                         const last_value_index = l - 1;
 
                         const target = values[l - 2];
+
                         // replace the array/map with whatever we got
-                        values[l - 2] = try self.getIndexed(target, values[last_value_index]);
+                        values[l - 2] = try self.getIndexed(&ref_allocator, target, values[last_value_index]);
                         stack.items.len = last_value_index;
                     },
                     .INDEX_SET => {
@@ -262,7 +337,7 @@ pub fn VM(comptime App: type) type {
                         const l = values.len;
                         std.debug.assert(l >= 3);
 
-                        const target = &values[l - 3];
+                        const target = values[l - 3];
                         const index = values[l - 2];
                         const value = values[l - 1];
                         // replace the array with whatever we got
@@ -307,7 +382,29 @@ pub fn VM(comptime App: type) type {
                             .frame_pointer = frame_pointer,
                         };
                     },
-                    .PRINT => std.debug.print("{}\n", .{stack.pop()}),
+                    .PRINT => {
+                        const arity = ip[0];
+                        ip += 1;
+
+                        if (arity > 0) {
+                            var items = stack.items;
+                            std.debug.assert(items.len >= arity);
+                            const start_index = items.len - arity;
+
+                            {
+                                std.debug.lockStdErr();
+                                defer std.debug.unlockStdErr();
+                                const stderr = std.io.getStdErr().writer();
+                                try items[start_index].write(stderr);
+                                for (items[start_index+1..]) |value| {
+                                    try stderr.writeAll(" ");
+                                    try value.write(stderr);
+                                }
+                                try stderr.writeAll("\n");
+                            }
+                            stack.items.len = start_index;
+                        }
+                    },
                     .RETURN => {
                         const value = if (stack.items.len > 0) stack.pop() else Value{.null = {}};
                         if (frame_count == 0) {
@@ -470,7 +567,7 @@ pub fn VM(comptime App: type) type {
                     .f64 => |r| return @as(f64, @floatFromInt(l)) < r,
                     else => {},
                 },
-                .string => |l| switch (right) {
+               .string => |l| switch (right) {
                     .string => |r| return std.mem.order(u8, l, r) == .lt,
                     else => {},
                 },
@@ -479,31 +576,45 @@ pub fn VM(comptime App: type) type {
             return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
         }
 
-        fn getIndexed(self: *Self, target: Value, index: Value) !Value {
+        fn getIndexed(self: *Self, ref_allocator: *MemoryPool(Value.Ref), target: Value, index: Value) !Value {
             switch (index) {
-                .i64 => |n| return self.getNumericIndex(target, n),
+                .i64 => |n| return self.getNumericIndex(ref_allocator, target, n),
                 .property => |n| return self.getProperty(target, n),
                 .string => |n| return self.getStringIndex(target, n),
-                else => return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()}),
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()});
         }
 
-        fn getNumericIndex(self: *Self, target: Value, index: i64) !Value {
+        fn getNumericIndex(self: *Self, ref_allocator: *MemoryPool(Value.Ref), target: Value, index: i64) !Value {
+            _ = ref_allocator;
             switch (target) {
-                .array => |arr| return arr.items[try self.resolveScalarIndex(arr.items.len, index)],
                 .string => |str| {
                     const actual_index = try self.resolveScalarIndex(str.len, index);
-                    return .{ .string = str[actual_index .. actual_index + 1] };
+                    return .{.string = str[actual_index .. actual_index + 1]};
                 },
-                .map => |map| return map.get(.{.i64 = index}) orelse .{.null = {}},
-                else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
+                .ref => |ref| switch (ref.value) {
+                    .list => |list| return list.items[try self.resolveScalarIndex(list.items.len, index)],
+                    .map => |map| return map.get(.{.i64 = index}) orelse .{.null = {}},
+                    else => {},
+                },
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()});
         }
 
         fn getProperty(self: *Self, target: Value, index: i32) !Value {
             switch (target) {
-                .array => |arr| switch (index) {
-                    -1 => return .{ .i64 = @intCast(arr.items.len) },
+                .ref => |ref| switch (ref.value) {
+                    .list => |list| switch (index) {
+                        -1 => return .{ .i64 = @intCast(list.items.len) },
+                        else => {},
+                    },
+                    .map_entry => |kv| switch (index) {
+                        -2 => return kv.key_ptr.toValue(),
+                        -3 => return kv.value_ptr.*,
+                        else => {},
+                    },
                     else => {},
                 },
                 else => {},
@@ -513,74 +624,97 @@ pub fn VM(comptime App: type) type {
 
         fn getStringIndex(self: *Self, target: Value, index: []const u8) !Value {
             switch (target) {
-                .map => |map| return map.get(.{.string = index}) orelse .{.null = {}},
-                else => return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()}),
+                .ref => |ref| switch (ref.value) {
+                    .map => |map| return map.get(.{.string = index}) orelse .{.null = {}},
+                    else => {},
+                },
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()});
         }
 
-        fn setIndexed(self: *Self, allocator: Allocator, target: *Value, index: Value, value: Value) !void {
+        fn setIndexed(self: *Self, allocator: Allocator, target: Value, index: Value, value: Value) !void {
             switch (index) {
                 .i64 => |n| return self.setNumericIndex(allocator, target, n, value),
                 .string => |n| return self.setStringIndex(allocator, target, n, value),
-                else => return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()}),
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()});
         }
 
-        fn setNumericIndex(self: *Self, allocator: Allocator, target: *Value, index: i64, value: Value) !void {
-            switch (target.*) {
-                .array => |arr| {
-                    const len = arr.items.len;
-                    const actual_index = try self.resolveScalarIndex(len, index);
-                    arr.items[actual_index] = value;
+        fn setNumericIndex(self: *Self, allocator: Allocator, target: Value, index: i64, value: Value) !void {
+            switch (target) {
+                .ref => |ref| switch (ref.value) {
+                    .list => |*list| {
+                        const len = list.items.len;
+                        const actual_index = try self.resolveScalarIndex(len, index);
+                        list.items[actual_index] = value;
+                        return;
+                    },
+                    .map => |*map| return map.put(allocator, .{.i64 = index}, value),
+                    else => {},
                 },
-                .map => |*map| return map.put(allocator, .{.i64 = index}, value),
-                else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()});
         }
 
-        fn setStringIndex(self: *Self, allocator: Allocator, target: *Value, index: []const u8, value: Value) !void {
-            switch (target.*) {
-                .map => |*map| return map.put(allocator, .{.string = index}, value),
-                else => return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()}),
+        fn setStringIndex(self: *Self, allocator: Allocator, target: Value, index: []const u8, value: Value) !void {
+            switch (target) {
+                .ref => |ref| switch (ref.value) {
+                    .map => |*map| return map.put(allocator, .{.string = index}, value),
+                    else => {},
+                },
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()});
         }
 
         fn incrementIndexed(self: *Self, target: Value, index: Value, incr: Value) !Value {
             switch (index) {
                 .i64 => |n| return self.incrementNumericIndexed(target, n, incr),
                 .string => |n| return self.incrementStringIndexed(target, n, incr),
-                else => return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()}),
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()});
         }
 
         fn incrementNumericIndexed(self: *Self, target: Value, index: i64, incr: Value) !Value {
             switch (target) {
-                .array => |arr| {
-                    const len = arr.items.len;
-                    const actual_index = try self.resolveScalarIndex(len, index);
-                    const value = arr.items[actual_index];
-                    const result = try self.add(value, incr);
-                    arr.items[actual_index] = result;
-                    return result;
+                .ref => |ref| switch (ref.value) {
+                    .list => |*list| {
+                        const len = list.items.len;
+                        const actual_index = try self.resolveScalarIndex(len, index);
+                        const value = list.items[actual_index];
+                        const result = try self.add(value, incr);
+                        list.items[actual_index] = result;
+                        return result;
+                    },
+                    .map => |*map| {
+                        const value = map.getPtr(.{.i64 = index}) orelse return self.setErrorFmt(error.MissingKey, "Map does not contain key '{d}'", .{index});
+                        value.* = try self.add(value.*, incr);
+                        return value.*;
+                    },
+                    else => {},
                 },
-                .map => |map| {
-                    const value = map.getPtr(.{.i64 = index}) orelse return self.setErrorFmt(error.MissingKey, "Map does not contain key '{d}'", .{index});
-                    value.* = try self.add(value.*, incr);
-                    return value.*;
-                },
-                else => return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()}),
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()});
         }
 
         fn incrementStringIndexed(self: *Self, target: Value, index: []const u8, incr: Value) !Value {
             switch (target) {
-                .map => |map| {
-                    const value = map.getPtr(.{.string = index}) orelse return self.setErrorFmt(error.MissingKey, "Map does not contain key '{d}'", .{index});
-                    value.* = try self.add(value.*, incr);
-                    return value.*;
+                .ref => |ref| switch (ref.value) {
+                    .map => |*map| {
+                        const value = map.getPtr(.{.string = index}) orelse return self.setErrorFmt(error.MissingKey, "Map does not contain key '{d}'", .{index});
+                        value.* = try self.add(value.*, incr);
+                        return value.*;
+                    },
+                    else => {},
                 },
-                else => return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()}),
+                else => {},
             }
+            return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()});
         }
 
         fn resolveScalarIndex(self: *Self, len: usize, index: i64) !usize {
@@ -598,6 +732,48 @@ pub fn VM(comptime App: type) type {
             }
             return @intCast(abs_index);
         }
+
+        fn toIterator(self: *Self, ref_allocator: *MemoryPool(Value.Ref), value: Value) !Value {
+            switch (value) {
+                .ref => |ref| switch (ref.value) {
+                    .list => |*list| {
+                        const new_ref = try ref_allocator.create();
+                        new_ref.* = .{.value = .{.list_iterator = .{.index = 0, .list = list, .ref = ref}}};
+                        return .{.ref = new_ref};
+                    },
+                    .map => |map| {
+                        const new_ref = try ref_allocator.create();
+                        new_ref.* = .{.value = .{.map_iterator = .{.inner = map.iterator(), .ref = ref}}};
+                        return .{.ref = new_ref};
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+            return self.setErrorFmt(error.TypeError, "Cannot iterate over {s}", .{value.friendlyArticleName()});
+        }
+
+        fn iterateNext(ref_allocator: *MemoryPool(Value.Ref), ref: *Value.Ref) !?Value {
+            switch (ref.value) {
+                .list_iterator => |*it| {
+                    const index = it.index;
+                    const items = it.list.items;
+                    if (index == items.len) {
+                        return null;
+                    }
+                    it.index = index + 1;
+                    return items[index];
+                },
+                .map_iterator => |*it| {
+                    const entry = it.inner.next() orelse return null;
+                    const new_ref = try ref_allocator.create();
+                    new_ref.* = .{.value = .{.map_entry = entry}};
+                    return .{.ref = new_ref};
+                },
+                else => unreachable,
+            }
+        }
+
 
         fn setErrorFmt(self: *Self, err: anyerror, comptime fmt: []const u8, args: anytype) anyerror {
             self.err = .{

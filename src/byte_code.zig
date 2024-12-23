@@ -58,6 +58,10 @@ pub fn ByteCode(comptime App: type) type {
             return self.frame.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
         }
 
+        pub fn opWithOperand(self: *Self, op_code1: OpCode, data: u8) !void {
+            return self.frame.write(self.allocator, &.{ @intFromEnum(op_code1), data });
+        }
+
         pub fn beginScript(self: *Self) void {
             const frame_count = self.frame_count;
             std.debug.assert(frame_count == 0);
@@ -76,6 +80,24 @@ pub fn ByteCode(comptime App: type) type {
                 try self.debug(.FUNCTION_NAME, 1 + @as(u8, @intCast(name.len)));
                 try self.frame.write(self.allocator, &.{@intCast(name.len)});
                 try self.frame.write(self.allocator, name);
+            }
+        }
+
+       pub fn debugVariableName(self: *Self, name: []const u8, idx: LocalIndex) !void {
+            std.debug.assert(comptime config.shouldDebug(App, .full));
+            try self.debug(.VARIABLE_NAME, SL + 1 + @as(u8, @intCast(name.len)));
+            try self.frame.write(self.allocator, std.mem.asBytes(&idx));
+            try self.frame.write(self.allocator, &.{@intCast(name.len)});
+            try self.frame.write(self.allocator, name);
+        }
+
+
+       pub fn comment(self: *Self, value: []const u8) !void {
+            if (comptime config.shouldDebug(App, .full)) {
+                const u16_len = @as(u16, @intCast(value.len));
+                try self.debug(.COMMENT, 2 + u16_len);
+                try self.frame.write(self.allocator, std.mem.asBytes(&u16_len));
+                try self.frame.write(self.allocator, value);
             }
         }
 
@@ -296,9 +318,12 @@ fn Buffer(comptime initial_size: u32) type {
     };
 }
 
-pub fn disassemble(comptime App: type, byte_code: []const u8, writer: anytype) !void {
+pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const u8, writer: anytype) !void {
     const LocalIndex = config.LocalType(App);
     const SL = @sizeOf(LocalIndex);
+
+    var variable_names = std.AutoHashMap(LocalIndex, []const u8).init(allocator);
+    defer variable_names.deinit();
 
     var i: usize = 0;
     const code_length = @as(u32, @bitCast(byte_code[1..5].*));
@@ -342,6 +367,21 @@ pub fn disassemble(comptime App: type, byte_code: []const u8, writer: anytype) !
                         try std.fmt.format(writer, "{x:0>4} fn {s}:\n", .{ op_code_pos, code[i .. i + function_name_len] });
                         i += function_name_len;
                     },
+                    .VARIABLE_NAME => {
+                        const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
+                        i += SL;
+                        const variable_name_length = code[i];
+                        i += 1;
+
+                        try variable_names.put(idx, code[i .. i + variable_name_length]);
+                        i += variable_name_length;
+                    },
+                    .COMMENT => {
+                        const len = @as(u16, @bitCast(code[i..i+2][0..2].*));
+                        i += 2;
+                        try std.fmt.format(writer, "// {s}\n", .{ code[i .. i + len] });
+                        i += len;
+                    },
                 }
             },
             .CONSTANT_I64 => {
@@ -384,12 +424,12 @@ pub fn disassemble(comptime App: type, byte_code: []const u8, writer: anytype) !
             },
             .SET_LOCAL => {
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
-                try std.fmt.format(writer, " @{d}\n", .{idx});
+                try std.fmt.format(writer, " {s}@{d}\n", .{variable_names.get(idx) orelse "", idx});
                 i += SL;
             },
             .GET_LOCAL => {
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
-                try std.fmt.format(writer, " @{d}\n", .{idx});
+                try std.fmt.format(writer, " {s}@{d}\n", .{variable_names.get(idx) orelse "", idx});
                 i += SL;
             },
             .INCR => {
@@ -399,7 +439,7 @@ pub fn disassemble(comptime App: type, byte_code: []const u8, writer: anytype) !
                 i += 1;
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
                 i += SL;
-                try std.fmt.format(writer, " @{d} {d}\n", .{ idx, value });
+                try std.fmt.format(writer, " {s}@{d} {d}\n", .{ variable_names.get(idx) orelse "", idx, value});
             },
             .INITIALIZE => {
                 const initialize_type: OpCode.Initialize = @enumFromInt(code[i]);
@@ -427,6 +467,14 @@ pub fn disassemble(comptime App: type, byte_code: []const u8, writer: anytype) !
                 }
                 try std.fmt.format(writer, "\n", .{});
             },
+            .FOREACH, .FOREACH_ITERATE => {
+                std.debug.print(" {d}\n", .{code[i]});
+                i += 1;
+            },
+            .PRINT => {
+                std.debug.print(" {d}\n", .{code[i]});
+                i += 1;
+            },
             else => try writer.writeAll("\n"),
         }
     }
@@ -444,6 +492,8 @@ pub const OpCode = enum(u8) {
     CONSTANT_STRING,
     DIVIDE,
     EQUAL,
+    FOREACH,
+    FOREACH_ITERATE,
     GET_LOCAL,
     GREATER,
     INCR,
@@ -469,6 +519,8 @@ pub const OpCode = enum(u8) {
 
     const Debug = enum {
         FUNCTION_NAME,
+        VARIABLE_NAME,
+        COMMENT,
     };
 
     pub const Initialize = enum {
@@ -616,6 +668,6 @@ fn expectDisassemble(comptime App: type, b: anytype, expected: []const u8) !void
     const byte_code = try b.toBytes(t.allocator);
     defer t.allocator.free(byte_code);
 
-    try disassemble(App, byte_code, arr.writer());
+    try disassemble(App, t.allocator, byte_code, arr.writer());
     try t.expectString(expected, arr.items);
 }

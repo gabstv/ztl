@@ -11,6 +11,7 @@ const Token = @import("scanner.zig").Token;
 const Scanner = @import("scanner.zig").Scanner;
 
 const Allocator = std.mem.Allocator;
+const MemoryPool = std.heap.MemoryPool;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 // There's a long comment at the end of this file which tries to explain
@@ -118,14 +119,14 @@ pub fn Template(comptime App: type) type {
             };
         }
 
-        pub fn run(self: *Self, allocator: Allocator, writer: anytype, args: anytype) !void {
+        pub fn render(self: *Self, allocator: Allocator, writer: anytype, args: anytype) !void {
             var vm = VM(App).init(allocator);
             defer vm.deinit();
 
-            return self.runOn(writer, &vm, args);
+            return self.renderWithVM(writer, &vm, args);
         }
 
-        pub fn runOn(self: *Self, writer: anytype, vm: *VM(App), args: anytype) !void {
+        pub fn renderWithVM(self: *Self, writer: anytype, vm: *VM(App), args: anytype) !void {
             const T = @TypeOf(args);
             const allocator = vm._arena.allocator();
 
@@ -140,7 +141,7 @@ pub fn Template(comptime App: type) type {
                         break :blk field_names;
                     };
                     inline for(field_names) |name| {
-                        const value = Value.from(allocator, @field(args, name)) catch {
+                        const value = toValue(allocator, @field(args, name)) catch {
                             self.err = .{
                                 .position = null,
                                 .desc = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(args, name))),
@@ -157,7 +158,7 @@ pub fn Template(comptime App: type) type {
         }
 
         pub fn disassemble(self: *const Self, writer: anytype) !void {
-            return zt.disassemble(App, self.byte_code, writer);
+            return zt.disassemble(App, self.arena.child_allocator, self.byte_code, writer);
         }
 
         // allocator is an arena
@@ -340,6 +341,100 @@ fn sortVariableNames(values: [][]const u8) void {
     }.sort);
 }
 
+// Value.Ref's are created using the VM's arena allocator, because any value
+// created here, will live for the lifetime of the execution anyways.
+fn toValue(allocator: Allocator, zig: anytype) !Value {
+    const T = @TypeOf(zig);
+    switch (@typeInfo(T)) {
+        .null => return .{ .null = {} },
+        .int => |int| {
+            if (int.signedness == .signed) {
+                switch (int.bits) {
+                    1...64 => return .{ .i64 = zig },
+                    else => {}
+                }
+            } else {
+                switch (int.bits) {
+                    1...63 => return .{ .i64 = zig },
+                    else => {},
+                }
+            }
+            if (zig < std.math.minInt(i64) or zig > std.math.maxInt(i64)) {
+                return error.UnsupportedType;
+            }
+            return .{.i64 = @intCast(zig)};
+        },
+        .float => |float| {
+            switch (float.bits) {
+                1...64 => return .{ .f64 = zig },
+                else => return .{ .f64 = @floatCast(zig) },
+            }
+        },
+        .bool => return .{ .bool = zig },
+        .comptime_int => return .{ .i64 = zig },
+        .comptime_float => return .{ .f64 = zig },
+        .pointer => |ptr| switch (ptr.size) {
+            .One => switch (@typeInfo(ptr.child)) {
+                .array => {
+                    const Slice = []const std.meta.Elem(ptr.child);
+                    return toValue(allocator, @as(Slice, zig));
+                },
+                else => return toValue(allocator, zig.*),
+            }
+            .Many, .Slice => {
+                if (ptr.size == .Many and ptr.sentinel == null) {
+                    return error.UnsupportedType;
+                }
+                const slice = if (ptr.size == .Many) std.mem.span(zig) else zig;
+                const child = ptr.child;
+                if (child == u8) {
+                    return .{.string = zig};
+                }
+
+                var list: Value.List = .{};
+                try list.ensureTotalCapacity(allocator, slice.len);
+                for (slice) |v| {
+                    list.appendAssumeCapacity(try toValue(allocator, v));
+                }
+                const ref = try allocator.create(Value.Ref);
+                ref.* = .{.value = .{.list = list}};
+                return .{ .ref = ref };
+            },
+            else => return error.UnsupportedType,
+        },
+        .array => |arr| {
+            if (arr.child == u8) {
+                return .{.string = &zig};
+            }
+            return toValue(allocator, &zig);
+        },
+        .optional => |opt| {
+            if (zig) |v| {
+                return toValue(allocator, @as(opt.child, v));
+            }
+            return .{ .null = {} };
+        },
+        .@"union" => {
+            if (T == Value) {
+                return zig;
+            }
+            return error.UnsupportedType;
+        },
+        .@"struct" => |s| {
+            var map: Value.Map = .{};
+            try map.ensureTotalCapacity(allocator, s.fields.len);
+            inline for (s.fields) |field| {
+                map.putAssumeCapacity(.{.string = field.name}, try toValue(allocator, @field(zig, field.name)));
+            }
+            const ref = try allocator.create(Value.Ref);
+            ref.* = .{.value = .{.map = map}};
+            return .{ .ref = ref };
+        },
+        else => return error.UnsupportedType,
+    }
+}
+
+
 const t = @import("t.zig");
 test "Template: simple" {
     try testTemplate("Simple", "Simple", .{});
@@ -431,7 +526,7 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
 
     var buf = std.ArrayList(u8).init(t.allocator);
     defer buf.deinit();
-    tmpl.run(t.allocator, buf.writer(), args) catch |err| {
+    tmpl.render(t.allocator, buf.writer(), args) catch |err| {
         const zts = tmpl.translateToZt(template) catch unreachable;
         defer zts.deinit();
         std.debug.print("==zt source:==\n{s}\n", .{zts.src});

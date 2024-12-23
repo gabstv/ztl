@@ -11,6 +11,7 @@ const CONTINUE_BIT = @as(u64, @bitCast([8]u8{ 'c', 'o', 'n', 't', 'i', 'n', 'u',
 const ELSE_BIT = @as(u32, @bitCast([4]u8{ 'e', 'l', 's', 'e' }));
 const FALSE_BIT = @as(u40, @bitCast([5]u8{ 'f', 'a', 'l', 's', 'e' }));
 const FN_BIT = @as(u16, @bitCast([2]u8{ 'f', 'n' }));
+const FOREACH_BIT = @as(u56, @bitCast([7]u8{ 'f', 'o', 'r', 'e', 'a', 'c', 'h' }));
 const FOR_BIT = @as(u24, @bitCast([3]u8{ 'f', 'o', 'r' }));
 const IF_BIT = @as(u16, @bitCast([2]u8{ 'i', 'f' }));
 const NULL_BIT = @as(u32, @bitCast([4]u8{ 'n', 'u', 'l', 'l' }));
@@ -21,7 +22,7 @@ const RETURN_BIT = @as(u48, @bitCast([6]u8{ 'r', 'e', 't', 'u', 'r', 'n' }));
 const TRUE_BIT = @as(u32, @bitCast([4]u8{ 't', 'r', 'u', 'e' }));
 const VAR_BIT = @as(u24, @bitCast([3]u8{ 'v', 'a', 'r' }));
 const VOID_BIT = @as(u32, @bitCast([4]u8{ 'v', 'o', 'i', 'd' }));
-const WHILE_BIT = @as(u40, @bitCast([5]u8{ 'w', 'h', 'i', 'l', 'e' }));
+const WHILE_BIT = @as(u40, @bitCast([5]u8{ 'w', 'h', 'i', 'l', 'e'}));
 
 const ScanError = error{
     ScanError,
@@ -83,6 +84,7 @@ pub const Scanner = struct {
                 ']' => return self.createSimpleToken("RIGHT_BRACKET", "]"),
                 '(' => return self.createSimpleToken("LEFT_PARENTHESIS", "("),
                 ')' => return self.createSimpleToken("RIGHT_PARENTHESIS", ")"),
+                '|' => return self.createSimpleToken("PIPE", ")"),
                 ',' => return self.createSimpleToken("COMMA", ","),
                 '.' => return self.createSimpleToken("DOT", "."),
                 '$' => return self.createSimpleToken("DOLLAR", "$"),
@@ -387,6 +389,10 @@ pub const Scanner = struct {
                 ORELSE_BIT => return self.createSimpleToken("ORELSE", value),
                 else => {},
             },
+            7 => switch (@as(u56, @bitCast(value[0..7].*))) {
+                FOREACH_BIT => return self.createSimpleToken("FOREACH", value),
+                else => {},
+            },
             8 => switch (@as(u64, @bitCast(value[0..8].*))) {
                 CONTINUE_BIT => return self.createSimpleToken("CONTINUE", value),
                 else => {},
@@ -459,6 +465,7 @@ pub const Token = struct {
         FLOAT: f64,
         FN,
         FOR,
+        FOREACH,
         GREATER,
         GREATER_EQUAL,
         IDENTIFIER: []const u8,
@@ -477,6 +484,7 @@ pub const Token = struct {
         ORELSE,
         PERCENT,
         PERCENT_BRACE,
+        PIPE,
         PLUS,
         PLUS_EQUAL,
         PLUS_PLUS,
@@ -519,6 +527,7 @@ pub const Token = struct {
         FLOAT,
         FN,
         FOR,
+        FOREACH,
         GREATER,
         GREATER_EQUAL,
         IDENTIFIER,
@@ -537,6 +546,7 @@ pub const Token = struct {
         ORELSE,
         PERCENT,
         PERCENT_BRACE,
+        PIPE,
         PLUS,
         PLUS_EQUAL,
         PLUS_PLUS,
@@ -556,6 +566,21 @@ pub const Token = struct {
         WHILE,
     };
 };
+
+pub fn asUint(comptime string: anytype) @Type(std.builtin.Type{
+    .int = .{
+        .bits = @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
+        .signedness = .unsigned,
+    },
+}) {
+    const byteLength = @bitSizeOf(@TypeOf(string.*)) / 8 - 1;
+    const expectedType = *const [byteLength:0]u8;
+    if (@TypeOf(string) != expectedType) {
+        @compileError("expected : " ++ @typeName(expectedType) ++ ", got: " ++ @typeName(@TypeOf(string)));
+    }
+
+    return @bitCast(@as(*const [byteLength]u8, string).*);
+}
 
 const t = @import("t.zig");
 test "scanner: empty" {

@@ -6,12 +6,11 @@ const Allocator = std.mem.Allocator;
 const Error = zt.Error;
 const Position = zt.Position;
 
+const asUint = @import("scanner.zig").asUint;
 const config = @import("config.zig");
 const Token = @import("scanner.zig").Token;
 const Scanner = @import("scanner.zig").Scanner;
 const ByteCode = @import("byte_code.zig").ByteCode;
-
-const LEN_BIT = @as(u24, @bitCast([3]u8{ 'l', 'e', 'n' }));
 
 pub const CompileError = error{
     ScanError,
@@ -151,7 +150,7 @@ pub fn Compiler(comptime App: type) type {
             switch (self._current_token.value) {
                 .VAR => {
                     try self.advance();
-                    return self.variableDeclaration();
+                    return self.variableInitialization();
                 },
                 .FN => {
                     try self.advance();
@@ -219,7 +218,18 @@ pub fn Compiler(comptime App: type) type {
             }
         }
 
-        fn variableDeclaration(self: *Self) CompileError!void {
+        fn variableInitialization(self: *Self) CompileError!void {
+            try self.variableDeclaration(false);
+
+            try self.consume(.EQUAL, "assignment operator ('=')");
+            try self.expression();
+            try self.consumeSemicolon();
+
+            // prevents things like: var count = count + 1;
+            self._locals.items[self._locals.items.len - 1].depth = self.scopeDepth();
+        }
+
+        fn variableDeclaration(self: *Self, give_scope: bool) CompileError!void {
             // "var" already consumed
             try self.consume(.IDENTIFIER, "variable name");
 
@@ -240,17 +250,14 @@ pub fn Compiler(comptime App: type) type {
                 }
             }
 
+            if (comptime config.shouldDebug(App, .full) == true) {
+                try self._byte_code.debugVariableName(name, @intCast(locals.items.len));
+            }
+
             try locals.append(self._arena, .{
-                .depth = null, // can't be used until after the expression
                 .name = name,
+                .depth = if (give_scope) scope_depth else null,
             });
-
-            try self.consume(.EQUAL, "assignment operator ('=')");
-            try self.expression();
-            try self.consumeSemicolon();
-
-            // prevents things like: var count = count + 1;
-            locals.items[locals.items.len - 1].depth = scope_depth;
         }
 
         fn statement(self: *Self) CompileError!void {
@@ -276,9 +283,9 @@ pub fn Compiler(comptime App: type) type {
                 },
                 .IF => {
                     try self.advance();
-                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
+                    try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
                     try self.expression();
-                    try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
+                    try self.consume(.RIGHT_PARENTHESIS, "closing parenthesis (')')");
 
                     const jump_if_false = try jumper.forward(self, .JUMP_IF_FALSE_POP);
 
@@ -295,14 +302,14 @@ pub fn Compiler(comptime App: type) type {
                 },
                 .FOR => {
                     try self.advance();
-                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
+                    try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
 
                     // initializer variable needs its own scope
 
                     try self.beginScope(true);
 
                     if (try self.match(.VAR)) {
-                        try self.variableDeclaration();
+                        try self.variableInitialization();
                     } else if (try self.match(.SEMICOLON) == false) {
                         try self.expression();
                         try self.consumeSemicolon();
@@ -333,7 +340,7 @@ pub fn Compiler(comptime App: type) type {
                         // to capture might get reused (in a nested for, for example)
                         // because we use the value later on.
                         incr = try self._arena.dupe(u8, bc.endCapture());
-                        try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
+                        try self.consume(.RIGHT_PARENTHESIS, "closing parenthesis (')')");
                     }
 
                     // body
@@ -341,17 +348,7 @@ pub fn Compiler(comptime App: type) type {
                     const breakable_scope = try jumper.newBreakableScope(self);
                     defer breakable_scope.deinit();
 
-                    // don't call self.statement if we have a {, because that'll
-                    // start a new scope. But, above, we already started a new scope
-                    // to capture the for (var i = 0; ) variable. And while starting
-                    // an extra scope isn't the end of the world, it makes break/continue
-                    // harder to implement. It's easier to implement if we can guarantee
-                    // that each break/continue only breaks/continues from a single scope.
-                    if (try self.match(.LEFT_BRACE)) {
-                        try self.block();
-                    } else {
-                        try self.statement();
-                    }
+                    try self.statement();
 
                     // Continue here. NOT at the top of the loop, because we need
                     // to execute the increment step. (But note that after incr
@@ -372,20 +369,101 @@ pub fn Compiler(comptime App: type) type {
 
                     try self.endScope(false);
                 },
+                .FOREACH => {
+                    try self.advance();
+                    try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
+
+                    // iterators need their own scope
+                    try self.beginScope(true);
+
+                    var iterable_count: u16 = 0;
+                    while (true) {
+                        iterable_count += 1;
+                        try self.expression();
+                        if (try self.match(.RIGHT_PARENTHESIS)) {
+                            break;
+                        }
+                        try self.consume(.COMMA, "iteratable separator (',')");
+                    }
+
+                    if (iterable_count == 0) {
+                        self.setError("foreach requires at least 1 value to iterate");
+                        return error.CompileError;
+                    }
+
+                    if (iterable_count > 8) {
+                        self.setError("foreach cannot iterate over more tha 8 values");
+                        return error.CompileError;
+                    }
+
+                    try self._locals.appendNTimes(self._arena, .{
+                        .name = "",
+                        .depth = self.scopeDepth(),
+                    }, iterable_count);
+
+                    try self.beginScope(true);
+                    try self.consume(.PIPE, "variable group start ('|')");
+                    var variable_count: u16 = 0;
+                    while (true) {
+                        variable_count += 1;
+                        try self.variableDeclaration(true);
+                        if (try self.match(.PIPE)) {
+                            break;
+                        }
+                        try self.consume(.COMMA, "variable separator (',')");
+                    }
+
+                    if (iterable_count != variable_count) {
+                        try self.setErrorFmt("foreach must have the same number of iterables as variables (iterables: {d}, variables: {d})", .{iterable_count, variable_count});
+                        return error.CompileError;
+                    }
+
+                    try bc.opWithOperand(.FOREACH, @intCast(iterable_count));
+
+                    // this is where we jump back to after every loop
+                    const jump_loop_top = jumper.backward(self);
+                    try bc.opWithOperand(.FOREACH_ITERATE, @intCast(iterable_count));
+                    const jump_if_false = try jumper.forward(self, .JUMP_IF_FALSE_POP);
+
+                    // body
+                    const breakable_scope = try jumper.newBreakableScope(self);
+                    defer breakable_scope.deinit();
+
+                    try self.statement();
+
+                    // pop off the iterator variables
+                    // for (variable_count) |_| {
+                    //     try bc.op(.POP);
+                    // }
+                    self._locals.items.len -= variable_count;
+
+                    // Continue here. NOT at the top of the loop, because we need
+                    // to execute the increment step. (But note that after incr
+                    // is called, the code naturally jumps back to the top)
+                    try breakable_scope.continueAt(jump_loop_top.jump_to);
+
+                    // back to condition check
+                    try jump_loop_top.goto();
+                    try jump_if_false.goto();
+
+                    // any breaks we have registered for this loop will jump here
+                    try breakable_scope.breakHere();
+                    try self.endScope(false);
+                },
                 .WHILE => {
                     try self.advance();
                     const jump_loop_top = jumper.backward(self);   // at the end of each iteration, we want to jump back here
 
-                    try self.consume(.LEFT_PARENTHESIS, "opening parentheses ('(')");
+                    try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
                     try self.expression();
-                    try self.consume(.RIGHT_PARENTHESIS, "closing parentheses (')')");
+                    try self.consume(.RIGHT_PARENTHESIS, "closing parenthesis (')')");
 
                     const breakable_scope = try jumper.newBreakableScope(self);
                     defer breakable_scope.deinit();
 
                     const jump_if_false = try jumper.forward(self, .JUMP_IF_FALSE_POP);
                     try self.statement();
-                    try breakable_scope.continueHere();
+                    try breakable_scope.continueAt(jump_loop_top.jump_to);
                     try jump_loop_top.goto();
 
                     try jump_if_false.goto(); // if our condition is false, this is where we want to jump to
@@ -433,9 +511,24 @@ pub fn Compiler(comptime App: type) type {
                 },
                 .PRINT => {
                     try self.advance();
-                    try self.expression();
+                    try self.consume(.LEFT_PARENTHESIS, "left parenthesis ('(')");
+                    var arity: u16 = 0;
+                    if (try self.match(.RIGHT_PARENTHESIS) == false) {
+                        while (true) {
+                            arity += 1;
+                            try self.expression();
+                            if (try self.match(.RIGHT_PARENTHESIS)) {
+                                break;
+                            }
+                            try self.consume(.COMMA, "parameter separator (',')");
+                        }
+                    }
+                    if (arity > 32) {
+                        try self.setErrorFmt("print supports up to 32 parameters, got: {d}\n", .{arity});
+                        return error.CompileError;
+                    }
                     try self.consumeSemicolon();
-                    try bc.op(.PRINT);
+                    try bc.opWithOperand(.PRINT, @intCast(arity));
                 },
                 else => {
                     try self.expression();
@@ -484,7 +577,7 @@ pub fn Compiler(comptime App: type) type {
 
         fn grouping(self: *Self, _: bool) CompileError!void {
             try self.expression();
-            return self.consume(.RIGHT_PARENTHESIS, "Expected closing parentheses ')'");
+            return self.consume(.RIGHT_PARENTHESIS, "Expected closing parenthesis ')'");
         }
 
         fn binary(self: *Self, _: bool) CompileError!void {
@@ -726,7 +819,6 @@ pub fn Compiler(comptime App: type) type {
             var arity: u16 = 0;
             if (try self.match(.RIGHT_PARENTHESIS) == false) {
                 while (true) {
-                    if (try self.match(.RIGHT_PARENTHESIS)) {}
                     arity += 1;
                     try self.expression();
                     if (try self.match(.RIGHT_PARENTHESIS)) {
@@ -751,7 +843,12 @@ pub fn Compiler(comptime App: type) type {
             var _code: ?i32 = null;
             switch (name.len) {
                 3 => switch (@as(u24, @bitCast(name[0..3].*))) {
-                    LEN_BIT => _code = -1,
+                    asUint("len") => _code = -1,
+                    asUint("key") => _code = -2,
+                    else => {},
+                },
+                5 => switch (@as(u40, @bitCast(name[0..5].*))) {
+                    asUint("value") => _code = -3,
                     else => {},
                 },
                 else => {},
@@ -868,7 +965,7 @@ pub fn Compiler(comptime App: type) type {
         // individually popped, the VM can simply restore the stack back to
         // the caller's previous state.
         fn endScope(self: *Self, comptime fast_pop: bool) !void {
-            const scope_pop_count = self.scopePopCount(1);
+            const scope_pop_count = self.scopePopCount(self.scopeDepth() - 1);
             _ = self._scopes.pop();
 
             self._locals.items.len -= scope_pop_count;
@@ -886,12 +983,11 @@ pub fn Compiler(comptime App: type) type {
         // Used in break & continue, which both must pop off any block-scoped variables.
         fn scopePopCount(self: *Self, depth: usize) usize {
             const locals = self._locals.items;
-            const scope_depth = self.scopeDepth() - depth;
 
             var i = locals.len;
             while (i > 0) {
                 i -= 1;
-                if (locals[i].depth.? <= scope_depth) {
+                if (locals[i].depth.? <= depth) {
                     return locals.len - i - 1;
                 }
             }
@@ -984,11 +1080,16 @@ fn Jumper(comptime App: type) type {
         // then jump back to the top)
         continue_scopes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u32)),
 
+
+        // For each scope, we record how deep we should pop on a break/continue
+        pop_depths: std.ArrayListUnmanaged(usize),
+
         const Self = @This();
 
         fn init(arena: Allocator) Self {
             return .{
                 .arena = arena,
+                .pop_depths = .{},
                 .break_scopes = .{},
                 .continue_scopes = .{}
             };
@@ -1019,6 +1120,7 @@ fn Jumper(comptime App: type) type {
         fn newBreakableScope(self: *Self, compiler: *Compiler(App)) !BreakableScope {
             try self.break_scopes.append(self.arena, .{});
             try self.continue_scopes.append(self.arena, .{});
+            try self.pop_depths.append(self.arena, compiler.scopeDepth());
             return .{
                 .jumper = self,
                 .compiler = compiler,
@@ -1034,11 +1136,26 @@ fn Jumper(comptime App: type) type {
         }
 
         fn recordBreakable(self: *Self, compiler: *Compiler(App), levels: usize, list: []std.ArrayListUnmanaged(u32), comptime op: []const u8) !void {
-            // how many locals in the current scope we need to pop off
-            const bc = &compiler._byte_code;
-            const pop_count = compiler.scopePopCount(levels);
+            const pop_depths = self.pop_depths.items;
+            if (levels > pop_depths.len) {
+                if (pop_depths.len == 0) {
+                    compiler.setError("'" ++ op ++ "' cannot be used outside of loop");
+                } else {
+                    try compiler.setErrorFmt("'" ++ op ++ " {d}' is invalid (current loop nesting: {d})", .{levels, pop_depths.len});
+                }
+                return error.CompileError;
+            }
+
+            // so we want to revert the scope by N levels. To figure this out,
+            // we look at what the recorded scope was N levels ago. Every time
+            // we enter a breakable scope, we record its depth, and on break/continue
+            // we can use that recorded depths to know how many values we need
+            // to pop from the stack.
+            const target_scope = pop_depths[pop_depths.len - levels];
+            const pop_count = compiler.scopePopCount(target_scope);
 
             // TODO: Add POPN op?
+            const bc = &compiler._byte_code;
             for (0..pop_count) |_| {
                 try bc.op(.POP);
             }
@@ -1047,15 +1164,6 @@ fn Jumper(comptime App: type) type {
            // create placeholder for jump address
             const jump_from = bc.currentPos();
             try bc.write(&.{ 0, 0 });
-
-            if (levels > list.len) {
-                if (list.len == 0) {
-                    compiler.setError("'" ++ op ++ "' cannot be used outside of loop");
-                } else {
-                    try compiler.setErrorFmt("'" ++ op ++ " {d}' is invalid (current loop nesting: {d})", .{levels, list.len});
-                }
-                return error.CompileError;
-            }
 
             var target = &list[list.len - levels];
             return target.append(self.arena, jump_from);
@@ -1119,21 +1227,25 @@ fn Jumper(comptime App: type) type {
             compiler: *Compiler(App),
 
             fn deinit(self: BreakableScope) void {
+                _ = self.jumper.pop_depths.pop();
                 _ = self.jumper.break_scopes.pop();
                 _ = self.jumper.continue_scopes.pop();
             }
 
             fn breakHere(self: BreakableScope) !void {
-                return self.insertJumps(self.jumper.break_scopes.getLast().items);
+                return self.insertJumps(self.jumper.break_scopes.getLast().items, self.compiler._byte_code.currentPos());
             }
 
             fn continueHere(self: BreakableScope) !void {
-                return self.insertJumps(self.jumper.continue_scopes.getLast().items);
+                return self.insertJumps(self.jumper.continue_scopes.getLast().items, self.compiler._byte_code.currentPos());
             }
 
-            fn insertJumps(self: BreakableScope, list: []u32) !void {
+            fn continueAt(self: BreakableScope, jump_to: u32) !void {
+                return self.insertJumps(self.jumper.continue_scopes.getLast().items, jump_to);
+            }
+
+            fn insertJumps(self: BreakableScope, list: []u32, jump_to: u32) !void {
                 var bc = &self.compiler._byte_code;
-                const jump_to = bc.currentPos();
 
                 for (list) |jump_from| {
                    const relative: i64 = @as(i64, jump_to) - jump_from;
@@ -1248,11 +1360,6 @@ fn maxRuleIndex(comptime E: type) usize {
 const Scope = struct {
     has_return: bool,
     local_start: usize,
-};
-
-const BreakContinue = struct {
-    breaks: std.ArrayListUnmanaged(u32) = .{},
-    continues: std.ArrayListUnmanaged(u32) = .{},
 };
 
 const Local = struct {

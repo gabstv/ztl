@@ -292,14 +292,16 @@ test "zt: increment/decrement" {
 }
 
 test "zt: variables" {
-    try testReturnValue(.{ .string = "Leto" },
+    defer t.reset();
+
+    try testReturnValue(.{.string = "Leto"},
         \\ var name = `Leto`;
         \\ return name;
     );
 
-    try testReturnValue(.{ .string = "LONG" }, "var " ++ "l" ** 127 ++ " = `LONG`; return " ++ "l" ** 127 ++ ";");
+    try testReturnValue(.{.string = "LONG"}, "var " ++ "l" ** 127 ++ " = `LONG`; return " ++ "l" ** 127 ++ ";");
 
-    try testReturnValue(.{ .string = "Leto" },
+    try testReturnValue(.{.string = "Leto"},
         \\ var name = `Leto`;
         \\ {
         \\    var name = "Ghanima" ;
@@ -307,7 +309,7 @@ test "zt: variables" {
         \\ return name;
     );
 
-    try testReturnValue(.{ .string = "other" },
+    try testReturnValue(.{.string = "other"},
         \\ var name = `Leto`;
         \\ {
         \\    var x = "Ghanima" ;
@@ -316,7 +318,7 @@ test "zt: variables" {
         \\ return x;
     );
 
-    try testReturnValue(.{ .string = "Ghanima" },
+    try testReturnValue(.{.string = "Ghanima"},
         \\ var name = `Leto`;
         \\ {
         \\    var name = "Ghanima" ;
@@ -593,27 +595,28 @@ test "zt: variable scopes" {
 }
 
 test "zt: array initialization" {
+    defer t.reset();
+
     {
-        var arr = [_]Value{};
-        try testReturnValue(.{ .array = .{ .items = &arr } }, "return [];");
+        try testReturnValue(t.createListRef(&.{}), "return [];");
     }
 
     {
         var arr = [_]Value{
             .{ .bool = true },
             .{ .f64 = 1.992 },
-            .{ .string = "over 9000!" },
+            .{.string = "over 9000!"},
         };
-        try testReturnValue(.{ .array = .{ .items = &arr } }, "return [true, 1.992, `over 9000!`];");
+        try testReturnValue(t.createListRef(&arr), "return [true, 1.992, `over 9000!`];");
     }
 
     {
         var arr = [_]Value{
             .{ .null = {} },
             .{ .i64 = 1 },
-            .{ .string = "hello" },
+            .{.string = "hello"},
         };
-        try testReturnValue(.{ .array = .{ .items = &arr } },
+        try testReturnValue(t.createListRef(&arr),
             \\ var n = null;
             \\ var other = "hello";
             \\ return [n, 1, other];
@@ -637,13 +640,15 @@ test "zt: array indexing" {
 }
 
 test "zt: array assignment" {
+    defer t.reset();
+
     try testReturnValue(.{ .i64 = 10 },
         \\ var arr = [0];
         \\ arr[0] = 10;
         \\ return arr[0];
     );
 
-    try testReturnValue(.{ .string = "a" },
+    try testReturnValue(.{.string = "a"},
         \\ var arr = [0, 1, 2];
         \\ arr[2] = "a";
         \\ return arr[2];
@@ -655,13 +660,13 @@ test "zt: array assignment" {
         \\ return arr[2];
     );
 
-    try testReturnValue(.{ .string = "x" },
+    try testReturnValue(.{.string = "x"},
         \\ var arr = [0, 1, 2];
         \\ arr[-2] = "x";
         \\ return arr[1];
     );
 
-    try testReturnValue(.{ .string = "a" },
+    try testReturnValue(.{.string = "a"},
         \\ var arr = [0, 1, 2];
         \\ arr[-3] = "a";
         \\ return arr[0];
@@ -718,17 +723,17 @@ test "zt: array assignment" {
 }
 
 test "zt: map initialization" {
+    defer t.reset();
+
     {
-        try testReturnValue(.{ .map = .{} }, "return %{};");
+        try testReturnValue(t.createMapRef(&.{}, &.{}), "return %{};");
     }
 
     {
-        var expected = try t.createMap(.{
-            .leto = true,
-            .@"123" = "hello",
-            .@"a key" = -1.23,
-        });
-        defer expected.deinit(t.allocator);
+        const expected = t.createMapRef(
+            &.{"leto", "123", "a key"},
+            &.{.{.bool = true}, .{.string = "hello"}, .{.f64 = -1.23}},
+        );
 
         try testReturnValue(expected,
             \\ return %{
@@ -764,13 +769,15 @@ test "zt: map indexing" {
 }
 
 test "zt: map assignment" {
+    defer t.reset();
+
     try testReturnValue(.{ .i64 = 10 },
         \\ var map = %{0: 2};
         \\ map[0] = 10;
         \\ return map[0];
     );
 
-    try testReturnValue(.{ .string = "3" },
+    try testReturnValue(.{.string = "3"},
         \\ var map = %{"a": 1, "b": 2};
         \\ map["a"] = "3";
         \\ return map["a"];
@@ -811,12 +818,14 @@ test "zt: array length" {
 }
 
 test "zt: string indexing" {
-    try testReturnValue(.{ .string = "a" }, "return `abc`[0];");
-    try testReturnValue(.{ .string = "b" }, "return `abc`[1];");
-    try testReturnValue(.{ .string = "c" }, "return `abc`[2];");
-    try testReturnValue(.{ .string = "c" }, "return `abc`[-1];");
-    try testReturnValue(.{ .string = "b" }, "return `abc`[-2];");
-    try testReturnValue(.{ .string = "a" }, "return `abc`[-3];");
+    defer t.reset();
+
+    try testReturnValue(.{.string = "a"}, "return `abc`[0];");
+    try testReturnValue(.{.string = "b"}, "return `abc`[1];");
+    try testReturnValue(.{.string = "c"}, "return `abc`[2];");
+    try testReturnValue(.{.string = "c"}, "return `abc`[-1];");
+    try testReturnValue(.{.string = "b"}, "return `abc`[-2];");
+    try testReturnValue(.{.string = "a"}, "return `abc`[-3];");
 
     try testRuntimeError("Index out of range. Index: 0, Len: 0", "return ``[0];");
     try testRuntimeError("Index out of range. Index: 1, Len: 0", "return ``[1];");
@@ -834,22 +843,26 @@ test "zt: invalid type indexing" {
     try testRuntimeError("Invalid index or property type, got a boolean", "return [][true];");
     try testRuntimeError("Invalid index or property type, got null", "return [][null];");
     try testRuntimeError("Invalid index or property type, got a float", "return [][1.2];");
-    try testRuntimeError("Cannot index an array with a string key", "return [][``];");
-    try testRuntimeError("Invalid index or property type, got an array", "return [][[]];");
+    try testRuntimeError("Cannot index a list with a string key", "return [][``];");
+    try testRuntimeError("Invalid index or property type, got a list", "return [][[]];");
 }
 
 test "zt: orelse" {
+    defer t.reset();
+
     try testReturnValue(.{ .i64 = 4 }, "return 4 orelse 1;");
     try testReturnValue(.{ .i64 = 2 }, "return null orelse 2;");
     try testReturnValue(.{ .i64 = 3 }, "return null orelse 2+1;");
-    try testReturnValue(.{ .string = "hi" }, "return null orelse null orelse null orelse `hi`;");
+    try testReturnValue(.{.string = "hi"}, "return null orelse null orelse null orelse `hi`;");
     try testReturnValue(.{ .i64 = 1 }, "return 1 orelse null orelse null orelse `hi`;");
 }
 
 test "zt: string dedupe" {
+    defer t.reset();
+
     try testReturnValueWithApp(
         struct { pub const zt_deduplicate_string_literals = true; },
-        .{ .string = "hello" },
+        .{.string = "hello"},
         \\ var x = "hello";
         \\ var y = "hello";
         \\ return x;
@@ -857,7 +870,7 @@ test "zt: string dedupe" {
 
     try testReturnValueWithApp(
         struct { pub const zt_deduplicate_string_literals = false; },
-        .{ .string = "hello" },
+        .{.string = "hello"},
         \\ var x = "hello";
         \\ var y = "hello";
         \\ return x;
@@ -1113,18 +1126,109 @@ test "zt: ternary" {
     );
 }
 
+test "zt: array references" {
+    try testReturnValue(.{ .i64 = 9 },
+        \\ var total = [1];
+        \\ {
+        \\   var ref = total;
+        \\   ref[0] = 9;
+        \\ }
+        \\ return total[0];
+    );
+}
+
+test "zt: foreach" {
+    try testReturnValue(.{ .i64 = 5 },
+        \\ var total = 5;
+        \\ foreach([]) |item| {
+        \\   total += item;
+        \\ }
+        \\ return total;
+    );
+
+    try testReturnValue(.{ .i64 = 15 },
+        \\ var total = 1;
+        \\ {
+        \\   var arr = [2, 4, 8];
+        \\   foreach(arr) |item| {
+        \\    total += item;
+        \\   }
+        \\ }
+        \\ return total;
+    );
+
+    try testReturnValue(.{ .i64 = 2 },
+        \\ var total = 2;
+        \\ {
+        \\   foreach(%{}) |kv| {
+        \\     total += kv.key + kv.value;
+        \\   }
+        \\ }
+        \\ return total;
+    );
+
+    try testReturnValue(.{ .i64 = 627 },
+        \\ var total = 1;
+        \\ {
+        \\   var map = %{10: 12, 300: 304};
+        \\   foreach(map) |kv| {
+        \\    total += kv.key + kv.value;
+        \\   }
+        \\ }
+        \\ return total;
+    );
+
+    try testReturnValue(.{ .i64 = 3627 },
+        \\ var total = 1;
+        \\ {
+        \\   var map = %{10: 12, 300: 304};
+        \\   var arr = [1000, 2000];
+        \\   foreach(map, arr) |kv, item| {
+        \\    total += kv.key + kv.value + item;
+        \\   }
+        \\ }
+        \\ return total;
+    );
+
+    // breaks on first short result
+    try testReturnValue(.{ .i64 = 1023 },
+        \\ var total = 1;
+        \\ {
+        \\   var map = %{10: 12, 300: 304};
+        \\   var arr = [1000];
+        \\   foreach(map, arr) |kv, item| {
+        \\    total += kv.key + kv.value + item;
+        \\   }
+        \\ }
+        \\ return total;
+    );
+
+    // breaks on first short result
+    try testReturnValue(.{ .i64 = 1024 },
+        \\ var total = 1;
+        \\ {
+        \\   var map = %{10: 13};
+        \\   var arr = [1000, 2000];
+        \\   foreach(map, arr) |kv, item| {
+        \\    total += kv.key + kv.value + item;
+        \\   }
+        \\ }
+        \\ return total;
+    );
+}
+
 fn testReturnValue(expected: Value, src: []const u8) !void {
-    // try testReturnValueWithApp(struct {
-    //     pub const zt_debug = DebugMode.full;
-    // }, expected, src);
+    try testReturnValueWithApp(struct {
+        pub const zt_debug = DebugMode.full;
+    }, expected, src);
 
-    // try testReturnValueWithApp(struct {
-    //     pub const zt_max_locals = 256;
-    // }, expected, src);
+    try testReturnValueWithApp(struct {
+        pub const zt_max_locals = 256;
+    }, expected, src);
 
-    // try testReturnValueWithApp(struct {
-    //     pub const zt_max_locals = 300;
-    // }, expected, src);
+    try testReturnValueWithApp(struct {
+        pub const zt_max_locals = 300;
+    }, expected, src);
 
     try testReturnValueWithApp(void, expected, src);
 }
@@ -1140,7 +1244,7 @@ fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) 
 
     const byte_code = try c.byteCode(t.allocator);
     defer t.allocator.free(byte_code);
-    // disassemble(App, byte_code, std.io.getStdErr().writer()) catch unreachable;
+    // disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
     var vm = VM(App).init(t.allocator);
     defer vm.deinit();
@@ -1151,13 +1255,12 @@ fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) 
         if (vm.err) |e| {
             std.debug.print("{any} {s}\n", .{ e.err, e.desc });
         }
-        disassemble(App, byte_code, std.io.getStdErr().writer()) catch unreachable;
+        disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
         return err;
     };
 
     const is_equal = expected.equal(value) catch false;
     if (is_equal == false) {
-        // disassemble(config, byte_code, std.io.getStdErr().writer()) catch unreachable;
         std.debug.print("{any} != {any}\n", .{ expected, value });
         return error.NotEqual;
     }
