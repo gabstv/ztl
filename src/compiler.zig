@@ -120,8 +120,7 @@ pub fn Compiler(comptime App: type) type {
             self._previous_token = self._current_token;
             self._current_token = self._scanner.next() catch |err| {
                 if (self._scanner.err) |se| {
-                    self.setError(se);
-                    return error.ScanError;
+                    return self.setError(error.ScanError, se);
                 }
                 return err;
             };
@@ -169,8 +168,7 @@ pub fn Compiler(comptime App: type) type {
                         while (true) {
                             arity += 1;
                             if (arity > 255) {
-                                try self.setErrorFmt("Function '{s}' has more than 255 parameters", .{name});
-                                return error.CompileError;
+                                return self.setErrorFmt(error.CompileError, "Function '{s}' has more than 255 parameters", .{name});
                             }
 
                             try self.consume(.IDENTIFIER, "variable name");
@@ -196,8 +194,7 @@ pub fn Compiler(comptime App: type) type {
                     var gop = try self._functions.getOrPut(self._arena, name);
                     if (gop.found_existing) {
                         if (gop.value_ptr.code_pos != null) {
-                            try self.setErrorFmt("Function '{s}' already declared", .{name});
-                            return error.CompileError;
+                            return self.setErrorFmt(error.CompileError, "Function '{s}' already declared", .{name});
                         }
                     } else {
                         gop.value_ptr.* = try self.newFunction(name);
@@ -236,8 +233,7 @@ pub fn Compiler(comptime App: type) type {
             var locals = &self._locals;
 
             if (locals.items.len == MAX_LOCALS) {
-                try self.setErrorFmt("Maximum number of local variable ({d}) exceeded", .{MAX_LOCALS});
-                return error.CompileError;
+                return self.setErrorFmt(error.CompileError, "Maximum number of local variable ({d}) exceeded", .{MAX_LOCALS});
             }
 
             const name = self._previous_token.value.IDENTIFIER;
@@ -245,8 +241,7 @@ pub fn Compiler(comptime App: type) type {
 
             if (self.localVariableIndex(name)) |idx| {
                 if (locals.items[idx].depth == scope_depth) {
-                    try self.setErrorFmt("Variable '{s}' already declared", .{name});
-                    return error.CompileError;
+                    return self.setErrorFmt(error.CompileError, "Variable '{s}' already declared", .{name});
                 }
             }
 
@@ -263,8 +258,7 @@ pub fn Compiler(comptime App: type) type {
         fn statement(self: *Self) CompileError!void {
             const scope = self.currentScope();
             if (scope.has_return) {
-                self.setError("Unreachable code detected");
-                return error.CompileError;
+                return self.setError(error.CompileError, "Unreachable code detected");
             }
             var bc = &self._byte_code;
             var jumper = &self._jumper;
@@ -387,13 +381,11 @@ pub fn Compiler(comptime App: type) type {
                     }
 
                     if (iterable_count == 0) {
-                        self.setError("foreach requires at least 1 value to iterate");
-                        return error.CompileError;
+                        return self.setError(error.CompileError, "foreach requires at least 1 value to iterate");
                     }
 
                     if (iterable_count > 8) {
-                        self.setError("foreach cannot iterate over more tha 8 values");
-                        return error.CompileError;
+                        return self.setError(error.CompileError, "foreach cannot iterate over more tha 8 values");
                     }
 
                     try self._locals.appendNTimes(self._arena, .{
@@ -414,8 +406,7 @@ pub fn Compiler(comptime App: type) type {
                     }
 
                     if (iterable_count != variable_count) {
-                        try self.setErrorFmt("foreach must have the same number of iterables as variables (iterables: {d}, variables: {d})", .{iterable_count, variable_count});
-                        return error.CompileError;
+                        return self.setErrorFmt(error.CompileError, "foreach must have the same number of iterables as variables (iterables: {d}, variables: {d})", .{iterable_count, variable_count});
                     }
 
                     try bc.opWithOperand(.FOREACH, @intCast(iterable_count));
@@ -487,8 +478,7 @@ pub fn Compiler(comptime App: type) type {
                     if (try self.match(.INTEGER)) {
                         const value = self._previous_token.value.INTEGER;
                         if (value < 0) {
-                            try self.setErrorFmt("break count must be a positive integer, got {d}", .{value});
-                            return error.CompileError;
+                            return self.setErrorFmt(error.CompileError, "break count must be a positive integer, got {d}", .{value});
                         }
                         break_count = @intCast(value);
                     }
@@ -501,8 +491,7 @@ pub fn Compiler(comptime App: type) type {
                     if (try self.match(.INTEGER)) {
                         const value = self._previous_token.value.INTEGER;
                         if (value < 0) {
-                            try self.setErrorFmt("continue count must be a positive integer, got {d}", .{value});
-                            return error.CompileError;
+                            return self.setErrorFmt(error.CompileError, "continue count must be a positive integer, got {d}", .{value});
                         }
                         continue_count = @intCast(value);
                     }
@@ -524,8 +513,7 @@ pub fn Compiler(comptime App: type) type {
                         }
                     }
                     if (arity > 32) {
-                        try self.setErrorFmt("print supports up to 32 parameters, got: {d}\n", .{arity});
-                        return error.CompileError;
+                        return self.setErrorFmt(error.CompileError, "print supports up to 32 parameters, got: {d}\n", .{arity});
                     }
                     try self.consumeSemicolon();
                     try bc.opWithOperand(.PRINT, @intCast(arity));
@@ -661,13 +649,11 @@ pub fn Compiler(comptime App: type) type {
             const name = self._previous_token.value.IDENTIFIER;
 
             const idx = self.localVariableIndex(name) orelse {
-                try self.setErrorFmt("Variable '{s}' is unknown", .{name});
-                return error.CompileError;
+                return self.setErrorFmt(error.CompileError, "Variable '{s}' is unknown", .{name});
             };
 
             if (self._locals.items[idx].depth == null) {
-                try self.setErrorFmt("Variable '{s}' used before being initialized", .{name});
-                return error.CompileError;
+                return self.setErrorFmt(error.CompileError, "Variable '{s}' used before being initialized", .{name});
             }
 
             const bc = &self._byte_code;
@@ -757,8 +743,7 @@ pub fn Compiler(comptime App: type) type {
                         .IDENTIFIER => |k| try self.stringLiteral(k, false),
                         .STRING => |k| try self.stringLiteral(k.value, k.escaped),
                         else => {
-                            try self.setErrorFmt("Map key must be an integer, string or identifier, got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) });
-                            return error.CompileError;
+                            return self.setErrorFmt(error.CompileError, "Map key must be an integer, string or identifier, got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) });
                         }
                     }
                     try self.advance();
@@ -855,8 +840,7 @@ pub fn Compiler(comptime App: type) type {
             }
 
             const code = _code orelse {
-                try self.setErrorFmt("'{s}' is not a valid property", .{name});
-                return error.CompileError;
+                return self.setErrorFmt(error.CompileError, "'{s}' is not a valid property", .{name});
             };
 
             const bc = &self._byte_code;
@@ -996,25 +980,20 @@ pub fn Compiler(comptime App: type) type {
 
         pub fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {
             const current_token = self._current_token;
-            try self.setErrorFmt("Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) });
-            return error.CompileError;
+            return self.setErrorFmt(error.CompileError, "Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) });
         }
 
-        pub fn setErrorFmt(self: *Self, comptime fmt: []const u8, args: anytype) !void {
+        pub fn setErrorFmt(self: *Self, err: anytype, comptime fmt: []const u8, args: anytype) !void {
             const desc = try std.fmt.allocPrint(self._arena, fmt, args);
-            return self.setError(desc);
+            return self.setError(err, desc);
         }
 
-        pub fn setError(self: *Self, desc: []const u8) void {
+        pub fn setError(self: *Self, err: anytype, desc: []const u8) @TypeOf(err)!void {
             self.err = .{
                 .desc = desc,
                 .position = .{}, // TODO
             };
-        }
-
-        fn invalidToken(self: *Self, err: anyerror, comptime desc: []const u8, token: Token) !void {
-            try self.setErrorFmt(err, desc ++ ", got: '{s}'", .{self._scanner.srcAt(token.position)}, null);
-            return error.CompileError;
+            return err;
         }
     };
 }
@@ -1139,11 +1118,9 @@ fn Jumper(comptime App: type) type {
             const pop_depths = self.pop_depths.items;
             if (levels > pop_depths.len) {
                 if (pop_depths.len == 0) {
-                    compiler.setError("'" ++ op ++ "' cannot be used outside of loop");
-                } else {
-                    try compiler.setErrorFmt("'" ++ op ++ " {d}' is invalid (current loop nesting: {d})", .{levels, pop_depths.len});
+                    return compiler.setError(error.CompileError, "'" ++ op ++ "' cannot be used outside of loop");
                 }
-                return error.CompileError;
+                return compiler.setErrorFmt(error.CompileError, "'" ++ op ++ " {d}' is invalid (current loop nesting: {d})", .{levels, pop_depths.len});
             }
 
             // so we want to revert the scope by N levels. To figure this out,
@@ -1188,8 +1165,7 @@ fn Jumper(comptime App: type) type {
                 // +2 because we need to jump over the jump_from location itself
                 const relative: i64 = jump_to - @as(i64, jump_from);
                 if (relative > 32_767) {
-                    self.compiler.setError("Jump size exceeded maximum allowed value");
-                    return error.CompileError;
+                    return self.compiler.setError(error.CompileError, "Jump size exceeded maximum allowed value");
                 }
 
                 return bc.insertInt(i16, jump_from, @intCast(relative));
@@ -1212,8 +1188,7 @@ fn Jumper(comptime App: type) type {
 
                const relative: i64 = -(@as(i64, jump_from) - jump_to);
                 if (relative < -32_768) {
-                    self.compiler.setError("Jump size exceeded maximum allowed value");
-                    return error.CompileError;
+                    return self.compiler.setError(error.CompileError, "Jump size exceeded maximum allowed value");
                 }
                 var relative_i16: i16 = @intCast(relative);
 
@@ -1250,8 +1225,7 @@ fn Jumper(comptime App: type) type {
                 for (list) |jump_from| {
                    const relative: i64 = @as(i64, jump_to) - jump_from;
                     if (relative > 32_767 or relative < -32_768) {
-                        self.compiler.setError("Jump size exceeded maximum allowed value");
-                        return error.CompileError;
+                        return self.compiler.setError(error.CompileError, "Jump size exceeded maximum allowed value");
                     }
                     const relative_i16: i16 = @intCast(relative);
                     bc.insertInt(i16, jump_from, @intCast(relative_i16));
