@@ -50,7 +50,7 @@ pub fn Template(comptime App: type) type {
             const template_arena = self.arena.allocator();
 
             {
-            // at this point, the template -> ztl translation will be invalid if
+                // at this point, the template -> ztl translation will be invalid if
                 // any globals (@variable) were used. If we try to compile, we'll
                 // get an error about undefined variables.
                 // We need to extract any globals from the ztl source code, and then
@@ -128,7 +128,6 @@ pub fn Template(comptime App: type) type {
 
         pub fn renderWithVM(self: *Self, writer: anytype, vm: *VM(App), args: anytype) !void {
             const T = @TypeOf(args);
-            const allocator = vm._arena.allocator();
 
             switch (@typeInfo(T)) {
                 .@"struct" => |s| {
@@ -141,7 +140,7 @@ pub fn Template(comptime App: type) type {
                         break :blk field_names;
                     };
                     inline for(field_names) |name| {
-                        const value = toValue(allocator, @field(args, name)) catch {
+                        const value = vm.createValue(@field(args, name)) catch {
                             self.err = .{
                                 .position = null,
                                 .desc = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(args, name))),
@@ -164,7 +163,7 @@ pub fn Template(comptime App: type) type {
         // allocator is an arena
         fn _translateToZt(self: *Self, allocator: Allocator, src: []const u8) ![]const u8 {
             if (src.len == 0) {
-                return "return ``;";
+                return "return null;";
             }
 
             var buf = std.ArrayList(u8).init(allocator);
@@ -239,7 +238,7 @@ pub fn Template(comptime App: type) type {
                 pos = code_end + end_tag_len; // skip the closing %> or -%>
                 start = pos;
             }
-            try buf.appendSlice("\nreturn;");
+            try buf.appendSlice("\nreturn null;");
             return buf.items;
         }
 
@@ -341,100 +340,6 @@ fn sortVariableNames(values: [][]const u8) void {
     }.sort);
 }
 
-// Value.Ref's are created using the VM's arena allocator, because any value
-// created here, will live for the lifetime of the execution anyways.
-fn toValue(allocator: Allocator, zig: anytype) !Value {
-    const T = @TypeOf(zig);
-    switch (@typeInfo(T)) {
-        .null => return .{ .null = {} },
-        .int => |int| {
-            if (int.signedness == .signed) {
-                switch (int.bits) {
-                    1...64 => return .{ .i64 = zig },
-                    else => {}
-                }
-            } else {
-                switch (int.bits) {
-                    1...63 => return .{ .i64 = zig },
-                    else => {},
-                }
-            }
-            if (zig < std.math.minInt(i64) or zig > std.math.maxInt(i64)) {
-                return error.UnsupportedType;
-            }
-            return .{.i64 = @intCast(zig)};
-        },
-        .float => |float| {
-            switch (float.bits) {
-                1...64 => return .{ .f64 = zig },
-                else => return .{ .f64 = @floatCast(zig) },
-            }
-        },
-        .bool => return .{ .bool = zig },
-        .comptime_int => return .{ .i64 = zig },
-        .comptime_float => return .{ .f64 = zig },
-        .pointer => |ptr| switch (ptr.size) {
-            .One => switch (@typeInfo(ptr.child)) {
-                .array => {
-                    const Slice = []const std.meta.Elem(ptr.child);
-                    return toValue(allocator, @as(Slice, zig));
-                },
-                else => return toValue(allocator, zig.*),
-            }
-            .Many, .Slice => {
-                if (ptr.size == .Many and ptr.sentinel == null) {
-                    return error.UnsupportedType;
-                }
-                const slice = if (ptr.size == .Many) std.mem.span(zig) else zig;
-                const child = ptr.child;
-                if (child == u8) {
-                    return .{.string = zig};
-                }
-
-                var list: Value.List = .{};
-                try list.ensureTotalCapacity(allocator, slice.len);
-                for (slice) |v| {
-                    list.appendAssumeCapacity(try toValue(allocator, v));
-                }
-                const ref = try allocator.create(Value.Ref);
-                ref.* = .{.value = .{.list = list}};
-                return .{ .ref = ref };
-            },
-            else => return error.UnsupportedType,
-        },
-        .array => |arr| {
-            if (arr.child == u8) {
-                return .{.string = &zig};
-            }
-            return toValue(allocator, &zig);
-        },
-        .optional => |opt| {
-            if (zig) |v| {
-                return toValue(allocator, @as(opt.child, v));
-            }
-            return .{ .null = {} };
-        },
-        .@"union" => {
-            if (T == Value) {
-                return zig;
-            }
-            return error.UnsupportedType;
-        },
-        .@"struct" => |s| {
-            var map: Value.Map = .{};
-            try map.ensureTotalCapacity(allocator, s.fields.len);
-            inline for (s.fields) |field| {
-                map.putAssumeCapacity(.{.string = field.name}, try toValue(allocator, @field(zig, field.name)));
-            }
-            const ref = try allocator.create(Value.Ref);
-            ref.* = .{.value = .{.map = map}};
-            return .{ .ref = ref };
-        },
-        else => return error.UnsupportedType,
-    }
-}
-
-
 const t = @import("t.zig");
 test "Template: simple" {
     try testTemplate("Simple", "Simple", .{});
@@ -523,6 +428,12 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
         return err;
     };
     // try tmpl.disassemble(std.io.getStdErr().writer());
+
+    // {
+    //     const zts = tmpl.translateToZt(template) catch unreachable;
+    //     defer zts.deinit();
+    //     std.debug.print("==zt source:==\n{s}\n", .{zts.src});
+    // }
 
     var buf = std.ArrayList(u8).init(t.allocator);
     defer buf.deinit();

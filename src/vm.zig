@@ -865,6 +865,99 @@ pub fn VM(comptime App: type) type {
             self.releaseRef(value.ref);
         }
 
+        pub fn createValue(self: *Self, zig: anytype) !Value {
+            const T = @TypeOf(zig);
+            switch (@typeInfo(T)) {
+                .null => return .{ .null = {} },
+                .int => |int| {
+                    if (int.signedness == .signed) {
+                        switch (int.bits) {
+                            1...64 => return .{ .i64 = zig },
+                            else => {}
+                        }
+                    } else {
+                        switch (int.bits) {
+                            1...63 => return .{ .i64 = zig },
+                            else => {},
+                        }
+                    }
+                    if (zig < std.math.minInt(i64) or zig > std.math.maxInt(i64)) {
+                        return error.UnsupportedType;
+                    }
+                    return .{.i64 = @intCast(zig)};
+                },
+                .float => |float| {
+                    switch (float.bits) {
+                        1...64 => return .{ .f64 = zig },
+                        else => return .{ .f64 = @floatCast(zig) },
+                    }
+                },
+                .bool => return .{ .bool = zig },
+                .comptime_int => return .{ .i64 = zig },
+                .comptime_float => return .{ .f64 = zig },
+                .pointer => |ptr| switch (ptr.size) {
+                    .One => switch (@typeInfo(ptr.child)) {
+                        .array => {
+                            const Slice = []const std.meta.Elem(ptr.child);
+                            return self.createValue(@as(Slice, zig));
+                        },
+                        else => return self.createValue(zig.*),
+                    }
+                    .Many, .Slice => {
+                        if (ptr.size == .Many and ptr.sentinel == null) {
+                            return error.UnsupportedType;
+                        }
+                        const slice = if (ptr.size == .Many) std.mem.span(zig) else zig;
+                        const child = ptr.child;
+                        if (child == u8) {
+                            return .{.string = zig};
+                        }
+
+                        const allocator = self._arena.allocator();
+                        var list: Value.List = .{};
+                        try list.ensureTotalCapacity(allocator, slice.len);
+                        for (slice) |v| {
+                            list.appendAssumeCapacity(try self.createValue(v));
+                        }
+                        const ref = try self.createRef();
+                        ref.* = .{.value = .{.list = list}};
+                        return .{ .ref = ref };
+                    },
+                    else => return error.UnsupportedType,
+                },
+                .array => |arr| {
+                    if (arr.child == u8) {
+                        return .{.string = &zig};
+                    }
+                    return self.createValue(&zig);
+                },
+                .optional => |opt| {
+                    if (zig) |v| {
+                        return self.createValue(@as(opt.child, v));
+                    }
+                    return .{ .null = {} };
+                },
+                .@"union" => {
+                    if (T == Value) {
+                        return zig;
+                    }
+                    return error.UnsupportedType;
+                },
+                .@"struct" => |s| {
+                    const allocator = self._arena.allocator();
+                    var map: Value.Map = .{};
+                    try map.ensureTotalCapacity(allocator, s.fields.len);
+                    inline for (s.fields) |field| {
+                        map.putAssumeCapacity(.{.string = field.name}, try self.createValue(@field(zig, field.name)));
+                    }
+                    const ref = try self.createRef();
+                    ref.* = .{.value = .{.map = map}};
+                    return .{ .ref = ref };
+                },
+                else => return error.UnsupportedType,
+            }
+        }
+
         fn releaseRef(self: *Self, ref: *Value.Ref) void {
             const count = ref.count;
             if (count > 1) {
