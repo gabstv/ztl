@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 const Stack = std.ArrayListUnmanaged(Value);
 
 pub fn VM(comptime App: type) type {
-    const MAX_CALL_FRAMES = config.extract(App, "zt_max_call_frames");
+    const MAX_CALL_FRAMES = config.extract(App, "ztl_max_call_frames");
     return struct {
         _arena: std.heap.ArenaAllocator,
 

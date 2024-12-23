@@ -1,10 +1,10 @@
 const std = @import("std");
-const zt = @import("zt.zig");
+const ztl = @import("ztl.zig");
 
-const VM = zt.VM;
-const Value = zt.Value;
-const Error = zt.Error;
-const Compiler = zt.Compiler;
+const VM = ztl.VM;
+const Value = ztl.Value;
+const Error = ztl.Error;
+const Compiler = ztl.Compiler;
 
 const config = @import("config.zig");
 const Token = @import("scanner.zig").Token;
@@ -50,10 +50,10 @@ pub fn Template(comptime App: type) type {
             const template_arena = self.arena.allocator();
 
             {
-            // at this point, the template -> zt translation will be invalid if
+            // at this point, the template -> ztl translation will be invalid if
                 // any globals (@variable) were used. If we try to compile, we'll
                 // get an error about undefined variables.
-                // We need to extract any globals from the zt source code, and then
+                // We need to extract any globals from the ztl source code, and then
                 // manipulate the bytecode to have it think those locals are valid
                 // (which, when we run the bytecode, the VM will inject)
                 const temp_globals = try self.extractGlobals(build_allocator, zt_src);
@@ -77,7 +77,7 @@ pub fn Template(comptime App: type) type {
             // template like:
             //    <%= @name %>
 
-            // would have an zt like:;
+            // would have an ztl like:;
             //    $ @name;
             //
             // And now we'd want to do:
@@ -158,7 +158,7 @@ pub fn Template(comptime App: type) type {
         }
 
         pub fn disassemble(self: *const Self, writer: anytype) !void {
-            return zt.disassemble(App, self.arena.child_allocator, self.byte_code, writer);
+            return ztl.disassemble(App, self.arena.child_allocator, self.byte_code, writer);
         }
 
         // allocator is an arena
@@ -556,7 +556,7 @@ fn testTemplateError(expected: []const u8, template: []const u8) !void {
 //      <%= @products[i].name %>
 //    <% } %>
 //
-// And to turn it into zt code that can be compiled and the run. At first glance,
+// And to turn it into ztl code that can be compiled and the run. At first glance,
 // we want to create something like:
 //
 //    var html = "";
@@ -568,7 +568,7 @@ fn testTemplateError(expected: []const u8, template: []const u8) !void {
 //
 // But we have 3 challenges.
 //
-// 1 - It's possible for string literals within the zt code to conflict with the
+// 1 - It's possible for string literals within the ztl code to conflict with the
 // template syntax. For example, this simple template is problematic:
 //
 //     <%= "hello %> world" %>
@@ -578,7 +578,7 @@ fn testTemplateError(expected: []const u8, template: []const u8) !void {
 // a code block (whether it's an output block or not), we need to use the zt
 // scanner to find the correct terminating tag.
 //
-// 2 - The above zt isn't valid: @products is undefined. We could add global
+// 2 - The above ztl isn't valid: @products is undefined. We could add global
 // variables to zt, but that would be implemented through a hashmap which would
 // be relatively slow compared to a local variable. So, we want to generate
 // code where @products is a local variable:
@@ -593,5 +593,5 @@ fn testTemplateError(expected: []const u8, template: []const u8) !void {
 //
 // 3 - While we're going to translate the template to valid zt, we'd like errors
 // to be somewhat meaningful from the point of view of the template. So we need
-// to inject debug information into the zt source, and both the scanner and
+// to inject debug information into the ztl source, and both the scanner and
 // compiler need to be aware of these.

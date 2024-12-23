@@ -1,10 +1,10 @@
 const std = @import("std");
-const zt = @import("zt.zig");
+const ztl = @import("ztl.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Error = zt.Error;
-const Position = zt.Position;
+const Error = ztl.Error;
+const Position = ztl.Position;
 
 const asUint = @import("scanner.zig").asUint;
 const config = @import("config.zig");
@@ -23,8 +23,8 @@ const CompileOpts = struct {
 };
 
 pub fn Compiler(comptime App: type) type {
-    const MAX_LOCALS = config.extract(App, "zt_max_locals");
-    const DEDUPLICATE_STRING_LITERALS = config.extract(App, "zt_deduplicate_string_literals");
+    const MAX_LOCALS = config.extract(App, "ztl_max_locals");
+    const DEDUPLICATE_STRING_LITERALS = config.extract(App, "ztl_deduplicate_string_literals");
 
     return struct {
         // the ByteCode that our compiler is generating

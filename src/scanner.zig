@@ -1,9 +1,9 @@
 const std = @import("std");
-const zt = @import("zt.zig");
+const ztl = @import("ztl.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Position = zt.Position;
+const Position = ztl.Position;
 
 const ScanError = error{
     ScanError,
