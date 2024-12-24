@@ -104,7 +104,11 @@ pub fn VM(comptime App: type) type {
                 const op_code: OpCode = @enumFromInt(ip[0]);
                 ip += 1;
                 switch (op_code) {
-                    .POP => self.release(stack.pop()),
+                    .POP => {
+                        const count = ip[0];
+                        ip += 1;
+                        self.releaseCount(stack, count);
+                    },
                     .PUSH => {
                         const value = stack.getLast();
                         self.acquire(value);
@@ -221,10 +225,6 @@ pub fn VM(comptime App: type) type {
                     .FOREACH_ITERATE => {
                         const value_count = ip[0];
                         ip += 1;
-
-                        // for (0..value_count) |_| {
-                        //     self.release(stack.pop());
-                        // }
 
                         var items = stack.items;
                         const len = items.len;
@@ -448,9 +448,7 @@ pub fn VM(comptime App: type) type {
                             }
 
                             const v = stack.pop();
-                            for (stack.items) |item| {
-                                self.release(item);
-                            }
+                            self.releaseCount(stack, stack.items.len);
                             break :blk v;
                         };
 
@@ -873,6 +871,19 @@ pub fn VM(comptime App: type) type {
                 return;
             }
             self.releaseRef(value.ref);
+        }
+
+        fn releaseCount(self: *Self, stack: *Stack, n: usize) void {
+            const items = stack.items;
+            const current_len = items.len;
+            std.debug.assert(current_len >= n);
+            const release_start = current_len - n;
+
+            for (items[release_start..]) |value| {
+                self.release(value);
+            }
+
+            stack.items.len = release_start;
         }
 
         pub fn createValue(self: *Self, zig: anytype) !Value {

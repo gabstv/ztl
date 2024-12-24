@@ -307,7 +307,7 @@ pub fn Compiler(comptime App: type) type {
                     } else if (try self.match(.SEMICOLON) == false) {
                         try self.expression();
                         try self.consumeSemicolon();
-                        try bc.op(.POP);
+                        try bc.pop();
                     }
 
                     // this is where we jump back to after every loop
@@ -329,7 +329,7 @@ pub fn Compiler(comptime App: type) type {
                         // increment
                         bc.beginCapture();
                         try self.expression();
-                        try bc.op(.POP);
+                        try bc.pop();
                         // need to dupe, because the temp space used by scanner
                         // to capture might get reused (in a nested for, for example)
                         // because we use the value later on.
@@ -434,7 +434,7 @@ pub fn Compiler(comptime App: type) type {
                     // the same scope-restoration logic (which works fine for FOR
                     // and WHILE, but requires this hack for FOREACH).
                     for (0..variable_count) |_| {
-                        try bc.op(.POP);
+                        try bc.pop();
                     }
 
                     const continue_pos = bc.currentPos();
@@ -539,7 +539,7 @@ pub fn Compiler(comptime App: type) type {
                 else => {
                     try self.expression();
                     try self.consumeSemicolon();
-                    try bc.op(.POP);
+                    try bc.pop();
                 },
             }
         }
@@ -894,7 +894,7 @@ pub fn Compiler(comptime App: type) type {
             // and this jump only exists to shortcircuit the condition because the condition is true
             const jump_if_true = try self._jumper.forward(self, .JUMP);
             try jump_if_false.goto();
-            try bc.op(.POP);
+            try bc.pop();
             try self.parsePrecedence(.OR);
             try jump_if_true.goto();
         }
@@ -907,7 +907,7 @@ pub fn Compiler(comptime App: type) type {
             try bc.op(.EQUAL);
 
             const jump_if_false = try self._jumper.forward(self, .JUMP_IF_FALSE_POP);
-            try bc.op(.POP); // pop off the left hand side (which was false)
+            try bc.pop(); // pop off the left hand side (which was false)
             try self.parsePrecedence(.OR);
             try jump_if_false.goto();
         }
@@ -976,7 +976,7 @@ pub fn Compiler(comptime App: type) type {
             }
             var bc = &self._byte_code;
             for (0..scope_pop_count) |_| {
-                try bc.op(.POP);
+                try bc.pop();
             }
         }
 
@@ -1152,7 +1152,7 @@ fn Jumper(comptime App: type) type {
             // TODO: Add POPN op?
             const bc = &compiler._byte_code;
             for (0..pop_count) |_| {
-                try bc.op(.POP);
+                try bc.pop();
             }
 
             try bc.op(.JUMP);

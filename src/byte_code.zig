@@ -29,6 +29,8 @@ pub fn ByteCode(comptime App: type) type {
         // the full code (basically, merging of all the frames)
         code: Buffer(INITIAL_CODE_SIZE),
 
+        pop_state: PopState,
+
         const LocalIndex = config.LocalType(App);
         const SL = @sizeOf(LocalIndex);
 
@@ -39,6 +41,7 @@ pub fn ByteCode(comptime App: type) type {
                 .temp = .{},
                 .data = .{},
                 .code = .{},
+                .pop_state = .{},
                 .frame = undefined,
                 .frames = undefined,
                 .frame_count = 0,
@@ -52,6 +55,33 @@ pub fn ByteCode(comptime App: type) type {
 
         pub fn op(self: *Self, op_code: OpCode) !void {
             return self.frame.write(self.allocator, &.{@intFromEnum(op_code)});
+        }
+
+        pub fn pop(self: *Self) !void {
+            const pos = self.currentPos();
+            const pop_state = &self.pop_state;
+
+            // coalesce two consecutive pops.
+            // -2 because if we're at X, then the previous pop would have to be
+            // at X - 2  (-1 for the count and -1 for the pop itself)
+            if (pop_state.last_pop == pos - 2) {
+                const count = pop_state.count + 1;
+                if (count < 256) {
+                    // Max of 255 pops per op
+                    self.frame.buf[pos - 1] = @intCast(count);
+                    pop_state.count = count;
+                    return;
+                }
+            }
+
+            // either we aren't following a pop or (much less likely, we've
+            // reached the 255 pop-per-op limit)
+            self.pop_state = .{
+                .count = 1,
+                .last_pop = pos,
+            };
+
+            return self.opWithOperand(.POP, 1);
         }
 
         pub fn op2(self: *Self, op_code1: OpCode, op_code2: OpCode) !void {
@@ -115,6 +145,9 @@ pub fn ByteCode(comptime App: type) type {
             const frame_count = self.frame_count - 1;
             self.frame_count = frame_count;
             self.frame = &self.frames[frame_count];
+
+            // reset the pop state, since our last pop position is all messed up
+            self.pop_state = .{};
             return code_pos;
         }
 
@@ -462,6 +495,11 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                     }
                 }
             },
+            .POP => {
+                const count = code[i];
+                i += 1;
+                try std.fmt.format(writer, " {d}\n", .{count});
+            },
             .CALL => {
                 const header_start = @as(u32, @bitCast(code[i .. i + 4][0..4].*));
                 i += 4;
@@ -537,6 +575,12 @@ pub const OpCode = enum(u8) {
         ARRAY,
         MAP,
     };
+};
+
+const PopState = struct {
+    count: usize = 0,
+    // negative value is a sentinel
+    last_pop: i64 = -1,
 };
 
 const t = @import("t.zig");
