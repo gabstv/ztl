@@ -128,10 +128,19 @@ pub fn Template(comptime App: type) type {
             return self.renderOnVM(&vm, writer, args);
         }
 
-        pub fn renderOnVM(self: *Self, vm: *VM(App), writer: anytype, args: anytype) !void {
-            const T = @TypeOf(args);
+        pub fn renderOnVM(self: *Self, vm: *VM(App), writer: anytype, globals: anytype) !void {
+            const T = @TypeOf(globals);
 
-            switch (@typeInfo(T)) {
+            if (T == []Global) {
+                std.mem.sort(Global, globals, {}, struct {
+                    fn lessThan(_: void, lhs: Global, rhs: Global) bool {
+                        return std.mem.order(u8, lhs.@"0", rhs.@"0") == .lt;
+                    }
+                }.lessThan);
+                for (globals) |g| {
+                    try vm.injectLocal(g.@"1");
+                }
+            } else switch (@typeInfo(T)) {
                 .@"struct" => |s| {
                     const field_names = comptime blk: {
                         var field_names: [s.fields.len][]const u8 = undefined;
@@ -142,17 +151,17 @@ pub fn Template(comptime App: type) type {
                         break :blk field_names;
                     };
                     inline for(field_names) |name| {
-                        const value = vm.createValue(@field(args, name)) catch {
+                        const value = vm.createValue(@field(globals, name)) catch {
                             self.err = .{
                                 .position = null,
-                                .desc = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(args, name))),
+                                .desc = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(globals, name))),
                             };
                             return error.InvalidArgument;
                         };
                         try vm.injectLocal(value);
                     }
                 },
-                else => @compileError("args must be a struct, got: " ++ @typeName(T)),
+                else => @compileError("globals must be a struct or an []ztl.Global, got: " ++ @typeName(T)),
             }
 
             _ = try vm.run(self.byte_code, writer);
@@ -303,6 +312,11 @@ pub fn Template(comptime App: type) type {
     };
 }
 
+pub const Global = struct {
+    []const u8,
+    Value,
+};
+
 const ZtSource = struct {
     src: []const u8,
     arena: ArenaAllocator,
@@ -415,6 +429,14 @@ test "Template: for loop" {
 
 test "Template: errors in template" {
     try testTemplateError("Missing expected end tag, '%>'", "<%=");
+}
+
+test "Template: map global" {
+    const globals = try t.allocator.alloc(Global, 2);
+    defer t.allocator.free(globals);
+    globals[0] = .{"key_2", .{.i64 = 123}};
+    globals[1] = .{"a", .{.string = "hello"}};
+    try testTemplate("hello 123", "<%= @a %> <%= @key_2 %>", globals);
 }
 
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {

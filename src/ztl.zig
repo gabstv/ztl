@@ -4,6 +4,7 @@ pub const VM = @import("vm.zig").VM;
 pub const Value = @import("value.zig").Value;
 pub const DebugMode = @import("config.zig").DebugMode;
 pub const Compiler = @import("compiler.zig").Compiler;
+pub const Global = @import("template.zig").Global;
 pub const Template = @import("template.zig").Template;
 pub const disassemble = @import("byte_code.zig").disassemble;
 
