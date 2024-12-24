@@ -19,6 +19,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 pub fn Template(comptime App: type) type {
     return struct {
+        app: App,
         err: ?Error,
         arena: ArenaAllocator,
         globals: [][]const u8,
@@ -26,8 +27,9 @@ pub fn Template(comptime App: type) type {
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator) Self {
+        pub fn init(allocator: Allocator, app: App) Self {
             return .{
+                .app = app,
                 .err = null,
                 .globals = &.{},
                 .byte_code = "",
@@ -120,7 +122,7 @@ pub fn Template(comptime App: type) type {
         }
 
         pub fn render(self: *Self, allocator: Allocator, writer: anytype, args: anytype) !void {
-            var vm = VM(App).init(allocator);
+            var vm = VM(App).init(allocator, self.app);
             defer vm.deinit();
 
             return self.renderOnVM(&vm, writer, args);
@@ -416,7 +418,7 @@ test "Template: errors in template" {
 }
 
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
-    var tmpl = Template(void).init(t.allocator);
+    var tmpl = Template(void).init(t.allocator, {});
     defer tmpl.deinit();
     tmpl.compile(template) catch |err| {
         if (tmpl.translateToZt(template)) |zts| {
@@ -450,7 +452,7 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
 }
 
 fn testTemplateError(expected: []const u8, template: []const u8) !void {
-    var tmpl = Template(void).init(t.allocator);
+    var tmpl = Template(void).init(t.allocator, {});
     defer tmpl.deinit();
     tmpl.compile(template) catch {
         try t.expectString(expected, tmpl.err.?.desc);

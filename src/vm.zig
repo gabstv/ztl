@@ -17,8 +17,10 @@ const Stack = std.ArrayListUnmanaged(Value);
 pub const RefPool = if (builtin.is_test) DebugRefPool else std.heap.MemoryPool(Value.Ref);
 
 pub fn VM(comptime App: type) type {
-    const MAX_CALL_FRAMES = config.extract(App, "ztl_max_call_frames");
+    const MAX_CALL_FRAMES = config.extract(App, "max_call_frames");
     return struct {
+        app: App,
+
         _arena: std.heap.ArenaAllocator,
         _ref_pool: RefPool,
 
@@ -34,8 +36,9 @@ pub fn VM(comptime App: type) type {
 
         const Self = @This();
 
-        pub fn init(allocator: Allocator) Self {
+        pub fn init(allocator: Allocator, app: App) Self {
             return .{
+                .app = app,
                 ._ref_pool = RefPool.init(allocator),
                 ._arena = std.heap.ArenaAllocator.init(allocator),
             };
@@ -75,6 +78,7 @@ pub fn VM(comptime App: type) type {
                 return .{ .null = {} };
             }
 
+            const app = self.app;
             const code = byte_code[9..code_end];
             const data = byte_code[code_end..];
 
@@ -422,6 +426,20 @@ pub fn VM(comptime App: type) type {
                             .ip = ip,
                             .frame_pointer = frame_pointer,
                         };
+                    },
+                    .CALL_ZIG => {
+                        if (std.meta.hasMethod(App, "call") == false) {
+                            return self.setError(error.UsageError, @typeName(App) ++ "has no 'call' method");
+                        }
+                        const arity = ip[0];
+                        ip += 1;
+
+                        const function_id = @as(u16, @bitCast(ip[0..2].*));
+                        ip += 2;
+
+                        const result = try app.call(self, @enumFromInt(function_id), stack.items[stack.items.len - arity..]);
+                        self.releaseCount(stack, arity);
+                        try stack.append(allocator, result);
                     },
                     .PRINT => {
                         const arity = ip[0];

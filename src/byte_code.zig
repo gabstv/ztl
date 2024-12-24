@@ -1,4 +1,5 @@
 const std = @import("std");
+const ztl = @import("ztl.zig");
 
 const Allocator = std.mem.Allocator;
 const config = @import("config.zig");
@@ -6,9 +7,9 @@ const config = @import("config.zig");
 pub const VERSION: u8 = 0;
 
 pub fn ByteCode(comptime App: type) type {
-    const MAX_CALL_FRAMES = config.extract(App, "ztl_max_call_frames");
-    const INITIAL_CODE_SIZE = config.extract(App, "ztl_initial_code_size");
-    const INITIAL_DATA_SIZE = config.extract(App, "ztl_initial_data_size");
+    const MAX_CALL_FRAMES = config.extract(App, "max_call_frames");
+    const INITIAL_CODE_SIZE = config.extract(App, "initial_code_size");
+    const INITIAL_DATA_SIZE = config.extract(App, "initial_data_size");
 
     return struct {
         allocator: Allocator,
@@ -57,6 +58,19 @@ pub fn ByteCode(comptime App: type) type {
             return self.frame.write(self.allocator, &.{@intFromEnum(op_code)});
         }
 
+        pub fn op2(self: *Self, op_code1: OpCode, op_code2: OpCode) !void {
+            return self.frame.write(self.allocator, &.{@intFromEnum(op_code1), @intFromEnum(op_code2)});
+        }
+
+        pub fn opWithData(self: *Self, op_code: OpCode, data: []const u8) !void {
+            try self.op(op_code);
+            return self.write(data);
+        }
+
+        pub fn write(self: *Self, data: []const u8) !void {
+            return self.frame.write(self.allocator, data);
+        }
+
         pub fn pop(self: *Self) !void {
             const pos = self.currentPos();
             const pop_state = &self.pop_state;
@@ -81,15 +95,7 @@ pub fn ByteCode(comptime App: type) type {
                 .last_pop = pos,
             };
 
-            return self.opWithOperand(.POP, 1);
-        }
-
-        pub fn op2(self: *Self, op_code1: OpCode, op_code2: OpCode) !void {
-            return self.frame.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
-        }
-
-        pub fn opWithOperand(self: *Self, op_code1: OpCode, data: u8) !void {
-            return self.frame.write(self.allocator, &.{ @intFromEnum(op_code1), data });
+            return self.opWithData(.POP, &.{1});
         }
 
         pub fn beginScript(self: *Self) void {
@@ -185,33 +191,25 @@ pub fn ByteCode(comptime App: type) type {
             return code;
         }
 
-        pub fn write(self: *Self, data: []const u8) !void {
-            return self.frame.write(self.allocator, data);
-        }
+        // pub fn write(self: *Self, data: []const u8) !void {
+        //     return self.frame.write(self.allocator, data);
+        // }
 
         pub fn insertInt(self: *Self, comptime T: type, pos: u32, value: T) void {
             const end = pos + @sizeOf(T);
             @memcpy(self.frame.buf[pos .. end], std.mem.asBytes(&value));
         }
 
-        pub fn call(self: *Self, data_pos: u32) !void {
-            try self.op(.CALL);
-            return self.frame.write(self.allocator, std.mem.asBytes(&data_pos));
-        }
-
         pub fn @"i64"(self: *Self, value: i64) !void {
-            try self.op(.CONSTANT_I64);
-            return self.frame.write(self.allocator, std.mem.asBytes(&value));
+            return self.opWithData(.CONSTANT_I64, std.mem.asBytes(&value));
         }
 
         pub fn @"f64"(self: *Self, value: f64) !void {
-            try self.op(.CONSTANT_F64);
-            return self.frame.write(self.allocator, std.mem.asBytes(&value));
+            return self.opWithData(.CONSTANT_F64, std.mem.asBytes(&value));
         }
 
         pub fn @"bool"(self: *Self, value: bool) !void {
-            try self.op(.CONSTANT_BOOL);
-            return self.frame.write(self.allocator, &.{if (value) 1 else 0});
+            try self.opWithData(.CONSTANT_BOOL, &.{if (value) 1 else 0});
         }
 
         pub fn string(self: *Self, value: []const u8) !u32 {
@@ -229,8 +227,7 @@ pub fn ByteCode(comptime App: type) type {
         }
 
         pub fn stringRef(self: *Self, data_start: u32) !void {
-            try self.op(.CONSTANT_STRING);
-            try self.frame.write(self.allocator, std.mem.asBytes(&data_start));
+            try self.opWithData(.CONSTANT_STRING, std.mem.asBytes(&data_start));
         }
 
         pub fn @"null"(self: *Self) !void {
@@ -238,52 +235,47 @@ pub fn ByteCode(comptime App: type) type {
         }
 
         pub fn property(self: *Self, value: i32) !void {
-            try self.op(.CONSTANT_PROPERTY);
-            return self.frame.write(self.allocator, std.mem.asBytes(&value));
+            try self.opWithData(.CONSTANT_PROPERTY, std.mem.asBytes(&value));
         }
 
         pub fn initializeArray(self: *Self, value_count: u32) !void {
-            try self.op(.INITIALIZE);
             var buf: [5]u8 = undefined;
             buf[0] = @intFromEnum(OpCode.Initialize.ARRAY);
             @memcpy(buf[1..], std.mem.asBytes(&value_count));
-            return self.frame.write(self.allocator, &buf);
+            return self.opWithData(.INITIALIZE, &buf);
         }
 
         pub fn initializeMap(self: *Self, entry_count: u32) !void {
-            try self.op(.INITIALIZE);
             var buf: [5]u8 = undefined;
             buf[0] = @intFromEnum(OpCode.Initialize.MAP);
             @memcpy(buf[1..], std.mem.asBytes(&entry_count));
-            return self.frame.write(self.allocator, &buf);
+            return self.opWithData(.INITIALIZE, &buf);
         }
 
         pub fn setLocal(self: *Self, local_index: LocalIndex) !void {
-            try self.op(.SET_LOCAL);
-            return self.frame.write(self.allocator, std.mem.asBytes(&local_index));
+            return self.opWithData(.SET_LOCAL, std.mem.asBytes(&local_index));
         }
 
         pub fn getLocal(self: *Self, local_index: LocalIndex) !void {
-            try self.op(.GET_LOCAL);
-            return self.frame.write(self.allocator, std.mem.asBytes(&local_index));
+            return self.opWithData(.GET_LOCAL, std.mem.asBytes(&local_index));
         }
 
         pub fn incr(self: *Self, local_index: LocalIndex, value: u8) !void {
-            try self.op(.INCR);
-            try self.frame.write(self.allocator, &.{value});
-            return self.frame.write(self.allocator, std.mem.asBytes(&local_index));
+            var buf: [1 + SL]u8 = undefined;
+            buf[0] = value;
+            @memcpy(buf[1..], std.mem.asBytes(&local_index));
+            try self.opWithData(.INCR, &buf);
         }
 
         pub fn debug(self: *Self, debug_code: OpCode.Debug, len: u16) !void {
-            try self.op(.DEBUG);
-
             // +1 for the OpCode.Debug
             // +2 for the length prefix itself
             // adding them here means the VM doesn't have to add + 3 to the value
             const total_len: u16 = len + 3;
-            try self.frame.write(self.allocator, std.mem.asBytes(&total_len));
-
-            return self.frame.write(self.allocator, &.{@intFromEnum(debug_code)});
+            var buf: [3]u8 = undefined;
+            @memcpy(buf[0..2], std.mem.asBytes(&total_len));
+            buf[2] = @intFromEnum(debug_code);
+            return self.opWithData(.DEBUG, &buf);
         }
 
         pub fn toBytes(self: *const Self, allocator: Allocator) ![]const u8 {
@@ -500,6 +492,16 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 i += 1;
                 try std.fmt.format(writer, " {d}\n", .{count});
             },
+            .CALL_ZIG => {
+                const arity = code[i];
+                i += 1;
+
+                const function_id = @as(u16, @bitCast(code[i..i + 2][0..2].*));
+                i += 2;
+
+                const name = @tagName(@as(ztl.Functions(App), @enumFromInt(function_id)));
+                try std.fmt.format(writer, " {s}({d})\n", .{ name, arity });
+            },
             .CALL => {
                 const header_start = @as(u32, @bitCast(code[i .. i + 4][0..4].*));
                 i += 4;
@@ -532,6 +534,7 @@ pub const OpCode = enum(u8) {
     DEBUG = 0,
     ADD,
     CALL,
+    CALL_ZIG,
     CONSTANT_BOOL,
     CONSTANT_F64,
     CONSTANT_I64,
@@ -627,7 +630,9 @@ test "bytecode: write + disassemble" {
 test "bytecode: functions debug none" {
     defer t.reset();
     const App = struct {
-        pub const ztl_debug = config.DebugMode.none;
+        pub const ZtlConfig = struct {
+            pub const debug = config.DebugMode.none;
+        };
     };
 
     var b = try ByteCode(App).init(t.arena.allocator());
@@ -639,7 +644,7 @@ test "bytecode: functions debug none" {
     try b.op(.RETURN);
 
     _ = try b.endFunction(data_pos, 2);
-    try b.call(data_pos);
+    try b.opWithData(.CALL, std.mem.asBytes(&data_pos));
     try b.op(.RETURN);
 
     try expectDisassemble(App, b,
@@ -657,7 +662,9 @@ test "bytecode: functions debug none" {
 test "bytecode: functions debug minimal" {
     defer t.reset();
     const App = struct {
-        pub const ztl_debug = config.DebugMode.minimal;
+        pub const ZtlConfig = struct {
+            pub const debug = config.DebugMode.minimal;
+        };
     };
 
     var b = try ByteCode(App).init(t.arena.allocator());
@@ -669,7 +676,7 @@ test "bytecode: functions debug minimal" {
     try b.op(.RETURN);
 
     _ = try b.endFunction(data_pos, 2);
-    try b.call(data_pos);
+    try b.opWithData(.CALL, std.mem.asBytes(&data_pos));
     try b.op(.RETURN);
 
     try expectDisassemble(App, b,
@@ -687,7 +694,9 @@ test "bytecode: functions debug minimal" {
 test "bytecode: functions debug full" {
     defer t.reset();
     const App = struct {
-        pub const ztl_debug = config.DebugMode.full;
+        pub const ZtlConfig = struct {
+            pub const debug = config.DebugMode.full;
+        };
     };
 
     var b = try ByteCode(App).init(t.arena.allocator());
@@ -699,7 +708,7 @@ test "bytecode: functions debug full" {
     try b.op(.RETURN);
 
     _ = try b.endFunction(data_pos, 2);
-    try b.call(data_pos);
+    try b.opWithData(.CALL, std.mem.asBytes(&data_pos));
     try b.op(.RETURN);
 
     try expectDisassemble(App, b,

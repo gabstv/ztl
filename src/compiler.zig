@@ -22,9 +22,32 @@ const CompileOpts = struct {
     force_locals:  []const []const u8 = &.{},
 };
 
-pub fn Compiler(comptime App: type) type {
-    const MAX_LOCALS = config.extract(App, "ztl_max_locals");
-    const DEDUPLICATE_STRING_LITERALS = config.extract(App, "ztl_deduplicate_string_literals");
+pub fn Compiler(comptime A: type) type {
+    const App = switch (@typeInfo(A)) {
+        .@"struct" => A,
+        .pointer => |ptr| ptr.child,
+        .void => void,
+        else => @compileError("Template App must be a struct, got: " ++ @tagName(@typeInfo(A))),
+    };
+
+    const MAX_LOCALS = config.extract(App, "max_locals");
+    const DEDUPLICATE_STRING_LITERALS = config.extract(A, "deduplicate_string_literals");
+
+    const CustomFunctions = ztl.Functions(App);
+
+    const CustomFunctionLookup: std.StaticStringMap(CustomFunctionMeta) = if (App == void or @hasDecl(App, "ZtlFunctions") == false) blk: {
+        break :blk std.StaticStringMap(CustomFunctionMeta).initComptime(.{});
+     } else blk: {
+        const fields = @typeInfo(CustomFunctions).@"enum".fields;
+        var metas: [fields.len]struct{[]const u8, CustomFunctionMeta} = undefined;
+        for (fields, 0..) |field, i| {
+            metas[i] = .{field.name, .{
+                .function_id = field.value,
+                .arity = @field(App.ZtlFunctions, field.name),
+            }};
+        }
+        break :blk std.StaticStringMap(CustomFunctionMeta).initComptime(metas);
+    };
 
     return struct {
         // the ByteCode that our compiler is generating
@@ -46,6 +69,7 @@ pub fn Compiler(comptime App: type) type {
         _previous_token: Token,
 
         _functions: std.StringHashMapUnmanaged(Function),
+        _function_calls: std.ArrayListUnmanaged(Function.Call),
 
         // Used to track the scope that we're in
         // Also assigned to a local to determine in what scope the local can be used
@@ -77,6 +101,7 @@ pub fn Compiler(comptime App: type) type {
                 ._locals = .{},
                 ._functions = .{},
                 ._arena = allocator,
+                ._function_calls = .{},
                 ._string_literals = .{},
                 ._jumper = Jumper(App).init(allocator),
                 ._byte_code = try ByteCode(App).init(allocator),
@@ -109,6 +134,20 @@ pub fn Compiler(comptime App: type) type {
 
             while (try self.match(.EOF) == false) {
                 try self.declaration();
+            }
+
+            var it = self._functions.iterator();
+            while (it.next()) |kv| {
+                if (kv.value_ptr.code_pos == null) {
+                    return self.setErrorFmt(error.CompileError, "Unknown function: '{s}'", .{kv.key_ptr.*});
+                }
+            }
+
+            for (self._function_calls.items) |fc| {
+                const arity = self._functions.get(fc.name).?.arity.?;
+                if (fc.arity != arity) {
+                    return self.setErrorWrongArity(fc.name, arity, fc.arity);
+                }
             }
         }
 
@@ -155,8 +194,15 @@ pub fn Compiler(comptime App: type) type {
                     try self.advance();
                     const bc = &self._byte_code;
 
+                    if (try self.match(.PRINT)) {
+                        return self.setError(error.CompileError, "Function 'print' reserved as built-in function");
+                    }
                     try self.consume(.IDENTIFIER, "function name");
                     const name = self._previous_token.value.IDENTIFIER;
+                    if (CustomFunctionLookup.get(name) != null) {
+                        return self.setErrorFmt(error.CompileError, "Function '{s}' reserved by custom application function", .{name});
+                    }
+
                     try self.consume(.LEFT_PARENTHESIS, "'(' after function name'");
 
                     try self.beginScope(false);
@@ -168,7 +214,7 @@ pub fn Compiler(comptime App: type) type {
                         while (true) {
                             arity += 1;
                             if (arity > 255) {
-                                return self.setErrorFmt(error.CompileError, "Function '{s}' has more than 255 parameters", .{name});
+                                return self.setErrorMaxArity(name);
                             }
 
                             try self.consume(.IDENTIFIER, "variable name");
@@ -414,7 +460,7 @@ pub fn Compiler(comptime App: type) type {
                         return self.setErrorFmt(error.CompileError, "foreach must have the same number of iterables as variables (iterables: {d}, variables: {d})", .{iterable_count, variable_count});
                     }
 
-                    try bc.opWithOperand(.FOREACH, @intCast(iterable_count));
+                    try bc.opWithData(.FOREACH, &.{@intCast(iterable_count)});
 
                     // this is where we jump back to after every loop
                     const jump_loop_top = jumper.backward(self);
@@ -439,7 +485,7 @@ pub fn Compiler(comptime App: type) type {
 
                     const continue_pos = bc.currentPos();
 
-                    try bc.opWithOperand(.FOREACH_ITERATE, @intCast(iterable_count));
+                    try bc.opWithData(.FOREACH_ITERATE, &.{@intCast(iterable_count)});
                     const jump_if_false = try jumper.forward(self, .JUMP_IF_FALSE_POP);
 
                     // BODY
@@ -534,7 +580,7 @@ pub fn Compiler(comptime App: type) type {
                         return self.setErrorFmt(error.CompileError, "print supports up to 32 parameters, got: {d}\n", .{arity});
                     }
                     try self.consumeSemicolon();
-                    try bc.opWithOperand(.PRINT, @intCast(arity));
+                    try bc.opWithData(.PRINT, &.{@intCast(arity)});
                 },
                 else => {
                     try self.expression();
@@ -823,6 +869,9 @@ pub fn Compiler(comptime App: type) type {
             if (try self.match(.RIGHT_PARENTHESIS) == false) {
                 while (true) {
                     arity += 1;
+                    if (arity > 255) {
+                        return self.setErrorMaxArity(name);
+                    }
                     try self.expression();
                     if (try self.match(.RIGHT_PARENTHESIS)) {
                         break;
@@ -831,12 +880,24 @@ pub fn Compiler(comptime App: type) type {
                 }
             }
 
+            if (CustomFunctionLookup.get(name)) |cf| {
+                if (cf.arity != arity) {
+                    return self.setErrorWrongArity(name, cf.arity, @intCast(arity));
+                }
+
+                var buf: [3]u8 = undefined;
+                buf[0] = @intCast(arity);
+                @memcpy(buf[1..], std.mem.asBytes(&cf.function_id));
+                return self._byte_code.opWithData(.CALL_ZIG, &buf);
+            }
+
             // TODO: check arity (assuming we've declared the function)
             const gop = try self._functions.getOrPut(self._arena, name);
             if (gop.found_existing == false) {
                 gop.value_ptr.* = try self.newFunction(name);
             }
-            try self._byte_code.call(gop.value_ptr.data_pos);
+            try self._function_calls.append(self._arena, .{.name = name, .arity = @intCast(arity)});
+            return self._byte_code.opWithData(.CALL, std.mem.asBytes(&gop.value_ptr.data_pos));
         }
 
         fn dot(self: *Self, can_assign: bool) CompileError!void {
@@ -902,7 +963,6 @@ pub fn Compiler(comptime App: type) type {
         fn @"orelse"(self: *Self, _: bool) CompileError!void {
             const bc = &self._byte_code;
             try bc.op(.PUSH);
-
             try bc.null();
             try bc.op(.EQUAL);
 
@@ -996,22 +1056,30 @@ pub fn Compiler(comptime App: type) type {
             return locals.len;
         }
 
-        pub fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {
+        fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {
             const current_token = self._current_token;
             return self.setErrorFmt(error.CompileError, "Expected " ++ message ++ ", got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) });
         }
 
-        pub fn setErrorFmt(self: *Self, err: anytype, comptime fmt: []const u8, args: anytype) !void {
+        fn setErrorFmt(self: *Self, err: anytype, comptime fmt: []const u8, args: anytype) !void {
             const desc = try std.fmt.allocPrint(self._arena, fmt, args);
             return self.setError(err, desc);
         }
 
-        pub fn setError(self: *Self, err: anytype, desc: []const u8) @TypeOf(err)!void {
+        fn setError(self: *Self, err: anytype, desc: []const u8) @TypeOf(err)!void {
             self.err = .{
                 .desc = desc,
                 .position = .{}, // TODO
             };
             return err;
+        }
+
+        fn setErrorMaxArity(self: *Self, name: []const u8) !void {
+            return self.setErrorFmt(error.CompileError, "Function '{s}' has more than 255 parameters", .{name});
+        }
+
+        fn setErrorWrongArity(self: *Self, name: []const u8, expected: u8, actual: u8) !void {
+            return self.setErrorFmt(error.CompileError, "Function '{s}' expects {d} parameter{s}, but called with {d}", .{name, expected, if (expected == 1) "" else "s", actual});
         }
     };
 }
@@ -1034,6 +1102,20 @@ const Function = struct {
     arity: ?u8 = null,
     data_pos: u32,
     code_pos: ?u32 = null,
+
+    // used at the end of compilation to make sure all function calls had
+    // the correct arity (we can't do this at the function call itself, since
+    // we might not know the correct arity yet)
+    const Call = struct {
+        arity: u8,
+        name: []const u8,
+    };
+};
+
+
+const CustomFunctionMeta = struct {
+    arity: u8,
+    function_id: u16,
 };
 
 // The messiest thing our compiler does is deal with JUMP (and its variants).
@@ -1096,7 +1178,6 @@ fn Jumper(comptime App: type) type {
             const bc = &compiler._byte_code;
 
             try bc.op(op_code);
-
             // create placeholder for jump address
             const jump_from = bc.currentPos();
             try bc.write(&.{ 0, 0 });

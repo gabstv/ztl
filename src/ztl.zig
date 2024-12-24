@@ -30,6 +30,39 @@ pub const Position = struct {
     pub const ZERO: Position = .{};
 };
 
+pub fn Functions(comptime A: type) type {
+    const App = switch (@typeInfo(A)) {
+        .@"struct" => A,
+        .pointer => |ptr| ptr.child,
+        .void => void,
+        else => @compileError("Template App must be a struct, got: " ++ @tagName(@typeInfo(A))),
+    };
+
+    if (App == void or @hasDecl(App, "ZtlFunctions") == false) {
+        return @Type(.{.@"enum" = .{
+            .decls = &.{},
+            .tag_type = u8,
+            .fields = &.{.{.name = "", .value = 0}}, // HACK, std.meta.stringToEnum doesn't work on an empty enum, lol what?
+            .is_exhaustive = true,
+        }});
+    }
+    const declarations = std.meta.declarations(App.ZtlFunctions);
+    var fields: [declarations.len]std.builtin.Type.EnumField = undefined;
+
+    for (declarations, 0..) |d, i| {
+        fields[i] = .{.name = d.name, .value = i};
+    }
+
+    // the type of the @"enum" tag is std.builtin.Type.Enum
+    // we use the type inference syntax, i.e. .{...}
+    return @Type(.{.@"enum" = .{
+        .decls = &.{},
+        .tag_type = u16,
+        .fields = &fields,
+        .is_exhaustive = true,
+    }});
+}
+
 const t = @import("t.zig");
 
 test {
@@ -39,7 +72,9 @@ test {
 test "ztl: local limit" {
     blk: {
         var c = Compiler(struct {
-            pub const ztl_max_locals = 3;
+            pub const ZtlConfig = struct {
+                pub const max_locals = 3;
+            };
         }).init(t.allocator) catch unreachable;
         defer c.deinit();
 
@@ -57,7 +92,9 @@ test "ztl: local limit" {
 
     {
         var c = Compiler(struct {
-            pub const ztl_max_locals = 3;
+            pub const ZtlConfig = struct {
+                pub const max_locals = 3;
+            };
         }).init(t.allocator) catch unreachable;
         defer c.deinit();
         try c.compile(
@@ -504,95 +541,6 @@ test "ztl: empty scope" {
     try testReturnValue(.{ .null = {} }, "{} return null;"); // doesn't crash, yay!
 }
 
-test "ztl: functions" {
-    try testReturnValue(.{ .i64 = 25 },
-        \\ return value(3);
-        \\
-        \\ fn value(start) {
-        \\   return start + 22;
-        \\ }
-    );
-
-    // implicit return
-    try testReturnValue(.{ .null = {} },
-        \\ return value();
-        \\
-        \\ fn value() {
-        \\ }
-    );
-
-    try testReturnValue(.{ .i64 = 26 },
-        \\ var start = 4;
-        \\ var noise = 99;
-        \\ return value(start);
-        \\
-        \\ fn value(start) {
-        \\   var noise = 100;
-        \\   return start + 22;
-        \\ }
-    );
-
-    try testReturnValue(.{ .i64 = 4 },
-        \\ var x = 4;
-        \\ var y = 6;
-        \\ return sum(x, y);
-        \\
-        \\ fn sum(a, b) {
-        \\    if (b == 0) {
-        \\       return 5;
-        \\    }
-        \\    return a;
-        \\ }
-    );
-
-    try testReturnValue(.{ .i64 = 10 },
-        \\ fn first() {
-        \\   var a = 1;
-        \\   var c = second();
-        \\   var d = 2;
-        \\   return a + c + d;
-        \\ }
-        \\
-        \\ fn second() {
-        \\   var y = 3;
-        \\   var z = 4;
-        \\   return y + z;
-        \\ }
-        \\
-        \\ return first();
-    );
-
-    try testReturnValue(.{ .i64 = 134 },
-        \\ fn sum(a, b, count) {
-        \\    if (count == 0) {
-        \\       return magic(a) + b;
-        \\    }
-        \\    return sum(a + b, b, count - 1);
-        \\ }
-        \\
-        \\ var x = 4;
-        \\ var y = 6;
-        \\ return sum(x, y, 10);
-        \\
-        \\
-        \\ fn magic(a) {
-        \\    if (a % 2 == 0) {
-        \\      return a * 2;
-        \\    }
-        \\    return a;
-        \\ }
-    );
-
-    try testError("Identifier \"" ++ "x" ** 128 ++ "\" exceeds the character limit of 127", "fn " ++ "x" ** 128 ++ "(){}");
-
-    try testError("Unreachable code detected",
-        \\ fn a() {
-        \\  return "a";
-        \\  return "b";
-        \\ }
-    );
-}
-
 test "ztl: variable scopes" {
     try testReturnValue(.{ .i64 = 100 },
         \\ var i = 0;
@@ -898,17 +846,21 @@ test "ztl: orelse" {
 test "ztl: string dedupe" {
     defer t.reset();
 
-    try testReturnValueWithApp(
-        struct { pub const ztl_deduplicate_string_literals = true; },
-        .{.string = "hello"},
+    try testReturnValueWithApp(struct {
+        pub const ZtlConfig = struct {
+            pub const deduplicate_string_literals = true;
+        };
+    },  .{}, .{.string = "hello"},
         \\ var x = "hello";
         \\ var y = "hello";
         \\ return x;
     );
 
-    try testReturnValueWithApp(
-        struct { pub const ztl_deduplicate_string_literals = false; },
-        .{.string = "hello"},
+    try testReturnValueWithApp(struct {
+        pub const ZtlConfig = struct {
+            pub const ztl_deduplicate_string_literals = false;
+        };
+    }, .{}, .{.string = "hello"},
         \\ var x = "hello";
         \\ var y = "hello";
         \\ return x;
@@ -1340,23 +1292,159 @@ test "ztl: stack overflow" {
     );
 }
 
-fn testReturnValue(expected: Value, src: []const u8) !void {
-    try testReturnValueWithApp(struct {
-        pub const ztl_debug = DebugMode.full;
-    }, expected, src);
+test "ztl: ztl functions" {
+    try testReturnValue(.{ .i64 = 25 },
+        \\ return value(3);
+        \\
+        \\ fn value(start) {
+        \\   return start + 22;
+        \\ }
+    );
 
-    try testReturnValueWithApp(struct {
-        pub const ztl_max_locals = 256;
-    }, expected, src);
+    // implicit return
+    try testReturnValue(.{ .null = {} },
+        \\ return value();
+        \\
+        \\ fn value() {
+        \\ }
+    );
 
-    try testReturnValueWithApp(struct {
-        pub const ztl_max_locals = 300;
-    }, expected, src);
+    try testReturnValue(.{ .i64 = 26 },
+        \\ var start = 4;
+        \\ var noise = 99;
+        \\ return value(start);
+        \\
+        \\ fn value(start) {
+        \\   var noise = 100;
+        \\   return start + 22;
+        \\ }
+    );
 
-    try testReturnValueWithApp(void, expected, src);
+    try testReturnValue(.{ .i64 = 4 },
+        \\ var x = 4;
+        \\ var y = 6;
+        \\ return sum(x, y);
+        \\
+        \\ fn sum(a, b) {
+        \\    if (b == 0) {
+        \\       return 5;
+        \\    }
+        \\    return a;
+        \\ }
+    );
+
+    try testReturnValue(.{ .i64 = 10 },
+        \\ fn first() {
+        \\   var a = 1;
+        \\   var c = second();
+        \\   var d = 2;
+        \\   return a + c + d;
+        \\ }
+        \\
+        \\ fn second() {
+        \\   var y = 3;
+        \\   var z = 4;
+        \\   return y + z;
+        \\ }
+        \\
+        \\ return first();
+    );
+
+    try testReturnValue(.{ .i64 = 134 },
+        \\ fn sum(a, b, count) {
+        \\    if (count == 0) {
+        \\       return magic(a) + b;
+        \\    }
+        \\    return sum(a + b, b, count - 1);
+        \\ }
+        \\
+        \\ var x = 4;
+        \\ var y = 6;
+        \\ return sum(x, y, 10);
+        \\
+        \\
+        \\ fn magic(a) {
+        \\    if (a % 2 == 0) {
+        \\      return a * 2;
+        \\    }
+        \\    return a;
+        \\ }
+    );
+
+    try testError("Identifier \"" ++ "x" ** 128 ++ "\" exceeds the character limit of 127", "fn " ++ "x" ** 128 ++ "(){}");
+
+    try testError("Unreachable code detected",
+        \\ fn a() {
+        \\  return "a";
+        \\  return "b";
+        \\ }
+    );
 }
 
-fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) !void {
+test "ztl: function custom" {
+    const App = struct {
+        id: i64,
+
+        pub const ZtlFunctions = struct {
+            pub const add = 2;
+            pub const double = 1;
+        };
+
+        pub fn call(self: *@This(), vm: *VM(*@This()), function: Functions(@This()), values: []Value) !Value {
+            _ = vm;
+            switch (function) {
+                .add => return .{.i64 = values[0].i64 + values[1].i64},
+                .double => return .{.i64 = values[0].i64 * 2 + self.id},
+            }
+        }
+    };
+
+    var app = App{.id = 200};
+    try testReturnValueWithApp(*App, &app, .{.i64 = 1204}, "return add(1000, double(2));");
+
+    try testErrorWithApp(*App, "Function 'add' reserved by custom application function", "fn add(){}");
+    try testErrorWithApp(*App, "Function 'add' expects 2 parameters, but called with 0", "return add());");
+    try testErrorWithApp(*App, "Function 'double' expects 1 parameter, but called with 2", "return double(2, 4));");
+}
+
+test "ztl: function error" {
+    try testError("Unknown function: 'flow'", "return flow();");
+    try testError("Function 'print' reserved as built-in function", "fn print(){}");
+
+    try testError("Function 'x' expects 0 parameters, but called with 1",
+        \\ fn x() {}
+        \\ x(23);
+    );
+
+    try testError("Function 'x' expects 1 parameter, but called with 3",
+        \\ x(1,2,3);
+        \\ fn x(a) {}
+    );
+}
+
+fn testReturnValue(expected: Value, src: []const u8) !void {
+    try testReturnValueWithApp(struct {
+        pub const ZtlConfig = struct {
+            pub const debug = DebugMode.full;
+        };
+    }, .{}, expected, src);
+
+    try testReturnValueWithApp(struct {
+        pub const ZtlConfig = struct {
+            pub const max_locals = 256;
+        };
+    }, .{}, expected, src);
+
+    try testReturnValueWithApp(struct {
+        pub const ZtlConfig = struct {
+            pub const max_locals = 300;
+        };
+    }, .{}, expected, src);
+
+    try testReturnValueWithApp(void, {}, expected, src);
+}
+
+fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, src: []const u8) !void {
     var c = try Compiler(App).init(t.allocator);
     defer c.deinit();
 
@@ -1369,7 +1457,7 @@ fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) 
     defer t.allocator.free(byte_code);
     // disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
-    var vm = VM(App).init(t.allocator);
+    var vm = VM(App).init(t.allocator, app);
     defer vm.deinit();
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -1391,7 +1479,11 @@ fn testReturnValueWithApp(comptime App: type, expected: Value, src: []const u8) 
 }
 
 fn testError(expected: []const u8, src: []const u8) !void {
-    var c = Compiler(void).init(t.allocator) catch unreachable;
+    return testErrorWithApp(void, expected, src);
+}
+
+fn testErrorWithApp(comptime App: type, expected: []const u8, src: []const u8) !void {
+    var c = Compiler(App).init(t.allocator) catch unreachable;
     defer c.deinit();
 
     c.compile(src, .{}) catch {
@@ -1419,7 +1511,7 @@ fn testRuntimeError(expected: []const u8, src: []const u8) !void {
     defer t.allocator.free(byte_code);
     // disassemble({}, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
-    var vm = VM(void).init(t.allocator);
+    var vm = VM(void).init(t.allocator, {});
     defer vm.deinit();
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
