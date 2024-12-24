@@ -52,6 +52,11 @@ pub fn VM(comptime App: type) type {
             self._ref_pool.deinit();
         }
 
+        pub fn reset(self: *Self, retain_with_limit: usize) void {
+            _ = self._arena.reset(.{.retain_with_limit = retain_with_limit});
+            _ = self._ref_pool.reset(.{.retain_capacity = {}});
+        }
+
         // See template.zig's hack around globals to see why we're doing this
         pub fn injectLocal(self: *Self, value: Value) !void {
             return self._stack.append(self._arena.allocator(), value);

@@ -123,10 +123,10 @@ pub fn Template(comptime App: type) type {
             var vm = VM(App).init(allocator);
             defer vm.deinit();
 
-            return self.renderWithVM(writer, &vm, args);
+            return self.renderOnVM(&vm, writer, args);
         }
 
-        pub fn renderWithVM(self: *Self, writer: anytype, vm: *VM(App), args: anytype) !void {
+        pub fn renderOnVM(self: *Self, vm: *VM(App), writer: anytype, args: anytype) !void {
             const T = @TypeOf(args);
 
             switch (@typeInfo(T)) {
