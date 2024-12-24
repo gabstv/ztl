@@ -222,9 +222,9 @@ pub fn VM(comptime App: type) type {
                         const value_count = ip[0];
                         ip += 1;
 
-                        for (0..value_count) |_| {
-                            self.release(stack.pop());
-                        }
+                        // for (0..value_count) |_| {
+                        //     self.release(stack.pop());
+                        // }
 
                         var items = stack.items;
                         const len = items.len;
@@ -482,6 +482,7 @@ pub fn VM(comptime App: type) type {
 
             const left_index = right_index - 1;
             values[left_index] = try operation(self, values[left_index], values[right_index]);
+            // TODO: release if we can do arithmetics on any ref values
             stack.items.len = right_index;
         }
 
@@ -572,6 +573,7 @@ pub fn VM(comptime App: type) type {
             const left_index = right_index - 1;
             const result = try operation(self, values[left_index], values[right_index]);
             values[left_index] = .{ .bool = result };
+            // TODO: release
             stack.items.len = right_index;
         }
 

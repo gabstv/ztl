@@ -393,7 +393,12 @@ pub fn Compiler(comptime App: type) type {
                         .depth = self.scopeDepth(),
                     }, iterable_count);
 
+
+                    const breakable_scope = try jumper.newBreakableScope(self);
+                    defer breakable_scope.deinit();
+
                     try self.beginScope(true);
+
                     try self.consume(.PIPE, "variable group start ('|')");
                     var variable_count: u16 = 0;
                     while (true) {
@@ -413,25 +418,35 @@ pub fn Compiler(comptime App: type) type {
 
                     // this is where we jump back to after every loop
                     const jump_loop_top = jumper.backward(self);
+
+                    // this SEEMS wrong, but it's how our foreach works with
+                    // continue and break. On a normal loop, we'll jump back here
+                    // and pop off the iterable variables. This only works because
+                    // on the initial loop, the FOREACH will inject N dummy values
+                    // (so that these pops are safe on the 1st iteration).
+                    // On continue (and break), the typical continue/break scope
+                    // restoration works (that is, they issue their own POPs).
+                    // For break, that's fine, because it'll just exit the loop.
+                    // For continue, it works only because our conitnue will
+                    // jump AFTER these POPs (since the continue will issue its
+                    // own pops).
+                    // This is necessary because, as-is, break and continue follow
+                    // the same scope-restoration logic (which works fine for FOR
+                    // and WHILE, but requires this hack for FOREACH).
+                    for (0..variable_count) |_| {
+                        try bc.op(.POP);
+                    }
+
+                    const continue_pos = bc.currentPos();
+
                     try bc.opWithOperand(.FOREACH_ITERATE, @intCast(iterable_count));
                     const jump_if_false = try jumper.forward(self, .JUMP_IF_FALSE_POP);
 
-                    // body
-                    const breakable_scope = try jumper.newBreakableScope(self);
-                    defer breakable_scope.deinit();
-
+                    // BODY
                     try self.statement();
 
-                    // pop off the iterator variables
-                    // for (variable_count) |_| {
-                    //     try bc.op(.POP);
-                    // }
-                    self._locals.items.len -= variable_count;
+                    try breakable_scope.continueAt(continue_pos);
 
-                    // Continue here. NOT at the top of the loop, because we need
-                    // to execute the increment step. (But note that after incr
-                    // is called, the code naturally jumps back to the top)
-                    try breakable_scope.continueAt(jump_loop_top.jump_to);
 
                     // back to condition check
                     try jump_loop_top.goto();
@@ -439,6 +454,9 @@ pub fn Compiler(comptime App: type) type {
 
                     // any breaks we have registered for this loop will jump here
                     try breakable_scope.breakHere();
+
+                    _ = self._scopes.pop();
+                    self._locals.items.len -= variable_count;
                     try self.endScope(false);
                 },
                 .WHILE => {

@@ -379,7 +379,17 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                     .COMMENT => {
                         const len = @as(u16, @bitCast(code[i..i+2][0..2].*));
                         i += 2;
-                        try std.fmt.format(writer, "// {s}\n", .{ code[i .. i + len] });
+
+                        // if the comment starts with a newline, we want to put that
+                        // before the address.
+                        var prefix: []const u8 = "";
+                        var comment = code[i .. i + len];
+                        if (comment[0] == '\n') {
+                            comment = comment[1..];
+                            prefix = "\n";
+                        }
+
+                        try std.fmt.format(writer, "{s}{x:0>4} // {s}\n", .{ prefix, op_code_pos, comment });
                         i += len;
                     },
                 }

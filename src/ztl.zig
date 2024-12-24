@@ -991,6 +991,44 @@ test "ztl: break for" {
     );
 }
 
+test "ztl: break foreach" {
+    try testReturnValue(.{ .i64 = 10 },
+        \\ var count = 0;
+        \\ var arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        \\ foreach (arr) |i| {
+        \\   if (i == 5) break;
+        \\   count += i;
+        \\ }
+        \\ return count;
+    );
+
+    try testReturnValue(.{ .i64 = 4010 },
+        \\ var c1 = 0;
+        \\ var c2 = 0;
+        \\ foreach ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) |i| {
+        \\   foreach ([10, 20, 30, 40, 50, 60, 70, 80, 90, 100]) |j| {
+        \\     if (j == 50) break;
+        \\     c2 += 100;
+        \\   }
+        \\   c1 += 1;
+        \\ }
+        \\ return c1 + c2;
+    );
+
+    try testReturnValue(.{ .i64 = 414 },
+        \\ var c1 = 0;
+        \\ var c2 = 0;
+        \\ foreach ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], %{a: 1, b: 3}) |i, kv| {
+        \\   foreach ([10, 20, 30, 40, 50, 60, 70, 80, 90, 100], [1,2,3,4,5,6]) |j, k| {
+        \\     if (j == 50) break 2;
+        \\     c2 += 100 + kv.value + k;
+        \\   }
+        \\   c1 += 1;
+        \\ }
+        \\ return c1 + c2;
+    );
+}
+
 test "ztl: continue while" {
     try testReturnValue(.{ .i64 = 5 },
         \\ var i = 0;
@@ -1077,6 +1115,44 @@ test "ztl: continue for" {
         \\   count += 1;
         \\ }
         \\ return count;
+    );
+}
+
+test "ztl: continue foreach" {
+    try testReturnValue(.{ .i64 = 50 },
+        \\ var count = 0;
+        \\ var arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        \\ foreach (arr) |i| {
+        \\   if (i == 5) continue;
+        \\   count += i;
+        \\ }
+        \\ return count;
+    );
+
+    try testReturnValue(.{ .i64 = 6012 },
+        \\ var c1 = 2;
+        \\ var c2 = 0;
+        \\ foreach ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) |i| {
+        \\   foreach ([10, 20, 30, 40, 50, 60, 70]) |j| {
+        \\     if (j == 50) continue;
+        \\     c2 += 100;
+        \\   }
+        \\   c1 += 1;
+        \\ }
+        \\ return c1 + c2;
+    );
+
+    try testReturnValue(.{ .i64 = 1264 },
+        \\ var c1 = 2;
+        \\ var c2 = 0;
+        \\ foreach ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], %{a: 1, b: 3, c: 4}) |i, kv| {
+        \\   foreach ([10, 20, 30, 40, 50, 60, 70, 80, 90, 100], [1,2,3,4,5,6]) |j, k| {
+        \\     if (j == 50) continue 2;
+        \\     c2 += 100 + kv.value + k;
+        \\   }
+        \\   c1 += 10000;
+        \\ }
+        \\ return c1 + c2;
     );
 }
 
