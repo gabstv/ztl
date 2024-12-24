@@ -249,6 +249,21 @@ test "ztl: comparison string" {
     try testReturnValue(.{ .bool = false }, "return `ABC` >= `abc`;");
 }
 
+test "ztl: comparison list" {
+    try testReturnValue(.{ .bool = true }, "return [] == [];");
+    try testReturnValue(.{ .bool = true }, "return [1] == [1];");
+    try testReturnValue(.{ .bool = false }, "return [1] == [1,``];");
+    try testReturnValue(.{ .bool = false }, "return [] == null;");
+}
+
+test "ztl: comparison map" {
+    try testReturnValue(.{ .bool = true }, "return %{} == %{};");
+    try testReturnValue(.{ .bool = true }, "return %{a:1} == %{a: 1};");
+    try testReturnValue(.{ .bool = true }, "return %{a:1, 123: `a`} == %{123: `a`, a: 1};");
+    try testReturnValue(.{ .bool = false }, "return %{a: 1} == %{a:1,b:2};");
+    try testReturnValue(.{ .bool = false }, "return %{} == null;");
+}
+
 test "ztl: increment/decrement" {
     try testReturnValue(.{ .i64 = 4 },
         \\ var i = 0;

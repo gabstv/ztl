@@ -567,13 +567,21 @@ pub fn VM(comptime App: type) type {
 
         fn comparison(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) anyerror!bool) !void {
             var values = stack.items;
+
             const right_index = values.len - 1;
             std.debug.assert(right_index >= 1);
 
             const left_index = right_index - 1;
-            const result = try operation(self, values[left_index], values[right_index]);
+
+
+            const left = values[left_index];
+            const right = values[right_index];
+            const result = try operation(self, left, right);
             values[left_index] = .{ .bool = result };
-            // TODO: release
+
+            self.release(left);
+            self.release(right);
+
             stack.items.len = right_index;
         }
 
