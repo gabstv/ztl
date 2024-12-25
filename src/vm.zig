@@ -1147,7 +1147,7 @@ pub fn VM(comptime App: type) type {
                     return error.UnsupportedType;
                 },
                 .@"struct" => |s| {
-                    const allocator = self._arena.allocator();
+                    const allocator = self._allocator;
                     var map: Value.Map = .{};
                     try map.ensureTotalCapacity(allocator, s.fields.len);
                     inline for (s.fields) |field| {
