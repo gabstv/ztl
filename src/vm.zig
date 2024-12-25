@@ -17,6 +17,7 @@ const Stack = std.ArrayListUnmanaged(Value);
 pub const RefPool = if (builtin.is_test) DebugRefPool else std.heap.MemoryPool(Value.Ref);
 
 pub fn VM(comptime App: type) type {
+    const ALLOW_LEAKS = config.extract(App, "allow_leaks");
     const MAX_CALL_FRAMES = config.extract(App, "max_call_frames");
     return struct {
         app: App,
@@ -152,11 +153,6 @@ pub fn VM(comptime App: type) type {
                     },
                     .CONSTANT_NULL => {
                         try stack.append(allocator, .{ .null = {} });
-                    },
-                    .CONSTANT_PROPERTY => {
-                        const value = @as(i32, @bitCast(ip[0..4].*));
-                        try stack.append(allocator, .{ .property = value });
-                        ip += 4;
                     },
                     .GET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
@@ -383,6 +379,38 @@ pub fn VM(comptime App: type) type {
                         try self.setIndexed(allocator, target, index, value);
                         stack.items.len = l - 2;
                     },
+                    .PROPERTY_GET => {
+                        const property: Property = @enumFromInt(@as(u16, @bitCast(ip[0..2].*)));
+                        ip += 2;
+                        const last = &stack.items[stack.items.len - 1];
+                        const target = last.*;
+                        last.* = try self.getProperty(target, property);
+                        self.release(target);
+                    },
+                    .METHOD => {
+                        const arity = ip[0];
+                        ip += 1;
+
+                        const method: Method = @enumFromInt(@as(u16, @bitCast(ip[0..2].*)));
+                        ip += 2;
+
+                        var values = stack.items;
+
+                        const l = values.len;
+                        // +1 for the target itself
+                        std.debug.assert(l >= arity + 1);
+
+                        const args_start = l - arity;
+                        const target_index = args_start - 1;
+
+                        const slot = &values[target_index];
+                        const target = slot.*;
+                        const value = try self.callMethod(allocator, target, method, values[args_start..]);
+                        self.acquire(value);
+                        slot.* = value;
+                        self.release(target);
+                        self.releaseCount(stack, arity);
+                    },
                     .INCR_REF => {
                         const values = stack.items;
                         const l = values.len;
@@ -461,7 +489,7 @@ pub fn VM(comptime App: type) type {
                                 }
                                 try stderr.writeAll("\n");
                             }
-                            stack.items.len = start_index;
+                            self.releaseCount(stack, arity);
                         }
                     },
                     .RETURN => {
@@ -657,7 +685,6 @@ pub fn VM(comptime App: type) type {
         fn getIndexed(self: *Self, ref_pool: *RefPool, target: Value, index: Value) !Value {
             switch (index) {
                 .i64 => |n| return self.getNumericIndex(ref_pool, target, n),
-                .property => |n| return self.getProperty(target, n),
                 .string => |n| return self.getStringIndex(target, n),
                 else => {},
             }
@@ -679,25 +706,6 @@ pub fn VM(comptime App: type) type {
                 else => {},
             }
             return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()});
-        }
-
-        fn getProperty(self: *Self, target: Value, index: i32) !Value {
-            switch (target) {
-                .ref => |ref| switch (ref.value) {
-                    .list => |list| switch (index) {
-                        -1 => return .{ .i64 = @intCast(list.items.len) },
-                        else => {},
-                    },
-                    .map_entry => |kv| switch (index) {
-                        -2 => return kv.key_ptr.toValue(),
-                        -3 => return kv.value_ptr.*,
-                        else => {},
-                    },
-                    else => {},
-                },
-                else => {},
-            }
-            return self.setErrorFmt(error.TypeError, "Unknown property {d} for {s}", .{ index, target.friendlyArticleName() });
         }
 
         fn getStringIndex(self: *Self, target: Value, index: []const u8) !Value {
@@ -819,6 +827,115 @@ pub fn VM(comptime App: type) type {
                 return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{ index, len });
             }
             return @intCast(abs_index);
+        }
+
+        fn getProperty(self: *Self, target: Value, prop: Property) !Value {
+            switch (target) {
+                .ref => |ref| switch (ref.value) {
+                    .list => |list| switch (prop) {
+                        .LEN => return .{ .i64 = @intCast(list.items.len) },
+                        else => {},
+                    },
+                    .map => |map| switch (prop) {
+                        .LEN => return .{ .i64 = @intCast(map.count()) },
+                        else => {},
+                    },
+                    .map_entry => |kv| switch (prop) {
+                        .KEY => return kv.key_ptr.toValue(),
+                        .VALUE => return kv.value_ptr.*,
+                        else => {},
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+            return self.setErrorFmt(error.TypeError, "Unknown property '{s}' for {s}", .{ prop.name(), target.friendlyArticleName() });
+        }
+
+        fn callMethod(self: *Self, allocator: Allocator, target: Value, method: Method, args: []Value) !Value {
+            switch (target) {
+                .ref => |ref| switch (ref.value) {
+                    .list => |*list| switch (method) {
+                        .POP => return list.popOrNull() orelse .{.null = {}},
+                        .LAST => return list.getLastOrNull() orelse .{.null = {}},
+                        .FIRST => {
+                            if (list.items.len == 0) {
+                                return .{.null = {}};
+                            }
+                            return list.items[0];
+                        },
+                        .APPEND => {
+                            const value = args[0];
+                            self.acquire(value);
+                            try list.append(allocator, value);
+                            return target;
+                        },
+                        .REMOVE => {
+                            const index = listIndexOf(list, args[0]) orelse return .{.bool = false};
+                            self.release(list.orderedRemove(index));
+                            return .{.bool = true};
+                        },
+                        .REMOVE_AT => {
+                            const value = args[0];
+                            if (value != .i64) {
+                                return self.setErrorFmt(error.TypeError, "list.removeAt index must be an integer, got {s}", .{value.friendlyArticleName() });
+                            }
+                            const index = try self.resolveScalarIndex(list.items.len, value.i64);
+                            return list.orderedRemove(@intCast(index));
+                        },
+                        .CONTAINS => return .{.bool = listIndexOf(list, args[0]) != null},
+                        .INDEX_OF => {
+                            const index = listIndexOf(list, args[0]) orelse return .{.null = {}};
+                            return .{.i64 = @intCast(index)};
+                        },
+                        .SORT => {
+                            std.mem.sort(Value, list.items, {}, struct {
+                                fn lessThan(_: void, lhs: Value, rhs: Value) bool {
+                                    return lhs.order(rhs) == .lt;
+                                }
+                            }.lessThan);
+                            return target;
+                        },
+                        .CONCAT => {
+                            const value = args[0];
+                            switch (value) {
+                                .ref => |oref| switch (oref.value) {
+                                    .list => |o| {
+                                        try list.ensureUnusedCapacity(allocator, o.items.len);
+                                        for (o.items) |v| {
+                                            self.acquire(v);
+                                            list.appendAssumeCapacity(v);
+                                        }
+                                    },
+                                    else => {
+                                        self.acquire(value);
+                                        try list.append(allocator, value);
+                                    },
+                                },
+                                else => try list.append(allocator, value),
+                            }
+                            return target;
+                        },
+                    },
+                    .map => |*map| switch (method) {
+                        .REMOVE => {
+                            const key = try self.valueToMapKey(args[0]);
+                            if (map.fetchSwapRemove(key)) |kv| {
+                                return kv.value;
+                            }
+                            return .{.null = {}};
+                        },
+                        .CONTAINS => {
+                            const key = try self.valueToMapKey(args[0]);
+                            return .{.bool = map.contains(key)};
+                        },
+                        else => {},
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+            return self.setErrorFmt(error.TypeError, "Unknown method '{s}' for {s}", .{ method.name(), target.friendlyArticleName() });
         }
 
         fn toIterator(self: *Self, ref_pool: *RefPool, value: Value) !Value {
@@ -1012,13 +1129,69 @@ pub fn VM(comptime App: type) type {
             switch (ref.value) {
                 .map_iterator => |it| self.releaseRef(it.ref),
                 .list_iterator => |it| self.releaseRef(it.ref),
+                .list => |list| if (comptime ALLOW_LEAKS == false) for (list.items) |value| {
+                    self.release(value);
+                },
+                .map => |map| if (comptime ALLOW_LEAKS == false) for (map.values()) |value| {
+                    self.release(value);
+                },
                 else => {},
             }
 
             self._ref_pool.destroy(ref);
         }
+
+        fn valueToMapKey(self: *Self, value: Value) !KeyValue {
+            switch (value) {
+                .i64 => |v| return .{.i64 = v},
+                .string => |v| return .{.string = v},
+                else => return self.setErrorFmt(error.TypeError, "Map key must be an integer or string, got {s}", .{value.friendlyArticleName() }),
+            }
+        }
     };
 }
+
+pub const Property = enum(u16) {
+    LEN = 1,
+    KEY = 2,
+    VALUE = 3,
+
+    pub fn name(self: Property) []const u8 {
+        return switch (self) {
+            .LEN => "len",
+            .KEY => "key",
+            .VALUE => "value",
+        };
+    }
+};
+
+pub const Method = enum(u16) {
+    POP = 1,
+    LAST = 2,
+    FIRST = 3,
+    APPEND = 4,
+    REMOVE = 5,
+    REMOVE_AT = 6,
+    CONTAINS = 7,
+    INDEX_OF = 8,
+    SORT = 9,
+    CONCAT = 10,
+
+    pub fn name(self: Method) []const u8 {
+        return switch (self) {
+            .POP => "pop",
+            .LAST => "last",
+            .FIRST => "first",
+            .APPEND => "append",
+            .REMOVE => "remove",
+            .REMOVE_AT => "removeAt",
+            .CONTAINS => "contains",
+            .INDEX_OF => "indexOf",
+            .SORT => "sort",
+            .CONCAT => "concat",
+        };
+    }
+};
 
 const Frame = struct {
     ip: [*]const u8,
@@ -1054,3 +1227,12 @@ const DebugRefPool = struct {
         self.pool.destroy(ref);
     }
 };
+
+fn listIndexOf(list: *const Value.List, needle: Value) ?usize {
+    for (list.items, 0..) |item, i| {
+        if (item.equal(needle) catch false) {
+            return i;
+        }
+    }
+    return null;
+}

@@ -13,7 +13,6 @@ pub const Value = union(enum) {
     bool: bool,
     null: void,
     ref: *Ref,
-    property: i32,
     string: []const u8,
 
     pub const Ref = struct {
@@ -33,7 +32,7 @@ pub const Value = union(enum) {
 
     pub fn write(self: Value, writer: anytype) !void {
         switch (self) {
-            .i64, .property => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
+            .i64 => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
             .bool => |v| return writer.writeAll(if (v) "true" else "false"),
             .f64 => |v| return std.fmt.format(writer, "{d}", .{v}),
             .null => return writer.writeAll("null"),
@@ -109,7 +108,6 @@ pub const Value = union(enum) {
                 .null => return false,
                 else => {},
             },
-            .property => return false,
             .ref => |ref| {
                 switch (other) {
                     .ref => {},
@@ -167,7 +165,6 @@ pub const Value = union(enum) {
             .bool => return "boolean",
             .null => return "null",
             .string => return "string",
-            .property => return "property",
             .ref => |ref| switch (ref.value) {
                 .list => return "list",
                 .map => return "map",
@@ -184,7 +181,6 @@ pub const Value = union(enum) {
             .f64 => return "a float",
             .bool => return "a boolean",
             .null => return "null",
-            .property => return "a property",
             .string => return "a string",
             .ref => |ref| switch (ref.value) {
                 .list => return "a list",
@@ -193,6 +189,76 @@ pub const Value = union(enum) {
                 .map_iterator => return "a map iterator",
                 .list_iterator => return "a list iterator",
             },
+        }
+    }
+
+    pub fn order(lhs: Value, rhs: Value) std.math.Order {
+        const math = std.math;
+
+        const lhs_tag = std.meta.activeTag(lhs);
+        const rhs_tag = std.meta.activeTag(rhs);
+        if (lhs_tag != rhs_tag) {
+            switch (lhs) {
+                .i64 => |l| switch (rhs) {
+                    .f64 => |r| return math.order(@as(f64, @floatFromInt(l)), r),
+                    else => {},
+                },
+                .f64 => |l| switch (rhs) {
+                    .i64 => |r| return math.order(l, @as(f64, @floatFromInt(r))),
+                     else => {},
+                },
+                else => {},
+            }
+            return std.math.order(@intFromEnum(lhs_tag), @intFromEnum(rhs_tag));
+        }
+
+        switch (lhs) {
+            .i64 => |l| return math.order(l, rhs.i64),
+            .f64 => |l| return math.order(l, rhs.f64),
+            .bool => |l| {
+                if (l == rhs.bool) {
+                    return .eq;
+                }
+                return if (l == true) .gt else .lt;
+            },
+            .null => return .eq,
+            .string => |l| return std.mem.order(u8, l, rhs.string),
+            .ref => |lref| {
+                const lhs_ref = lref.value;
+                const rhs_ref = rhs.ref.value;
+                const lhs_ref_tag = std.meta.activeTag(lhs_ref);
+                const rhs_ref_tag = std.meta.activeTag(rhs_ref);
+
+                if (lhs_ref_tag != rhs_ref_tag) {
+                    return std.math.order(@intFromEnum(lhs_ref_tag), @intFromEnum(rhs_ref_tag));
+                }
+
+                switch (lhs_ref) {
+                    .map_entry => |l| {
+                        const key_order = l.key_ptr.*.order(rhs_ref.map_entry.key_ptr.*);
+                        if (key_order != .eq) {
+                            return key_order;
+                        }
+                        return l.value_ptr.order(rhs_ref.map_entry.value_ptr.*);
+                    },
+                    .map => |l| return std.math.order(l.count(), rhs_ref.map.count()),
+                    .list => |l| {
+                        const len_order = std.math.order(l.items.len, rhs_ref.list.items.len);
+                        if (len_order != .eq) {
+                            return len_order;
+                        }
+                        for (l.items, rhs_ref.list.items) |ll, rr| {
+                            const item_order = ll.order(rr);
+                            if (item_order != .eq) {
+                                return item_order;
+                            }
+                        }
+                        return .eq;
+                    },
+                    .map_iterator => return .lt,
+                    .list_iterator => return .lt,
+                }
+            }
         }
     }
 };
@@ -230,6 +296,19 @@ pub const KeyValue = union(enum) {
                 .string => |r| return std.mem.eql(u8, l, r),
                 .i64 => return false,
             },
+        }
+    }
+
+    pub fn order(lhs: KeyValue, rhs: KeyValue) std.math.Order {
+        const lhs_tag = std.meta.activeTag(lhs);
+        const rhs_tag = std.meta.activeTag(rhs);
+        if (lhs_tag != rhs_tag) {
+            return std.math.order(@intFromEnum(lhs_tag), @intFromEnum(rhs_tag));
+        }
+
+        switch (lhs) {
+            .i64 => |l| return std.math.order(l, rhs.i64),
+            .string => |l| return std.mem.order(u8, l, rhs.string),
         }
     }
 

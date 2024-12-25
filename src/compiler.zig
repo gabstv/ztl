@@ -8,9 +8,12 @@ const Position = ztl.Position;
 
 const asUint = @import("scanner.zig").asUint;
 const config = @import("config.zig");
+const Value = @import("value.zig").Value;
 const Token = @import("scanner.zig").Token;
 const Scanner = @import("scanner.zig").Scanner;
 const ByteCode = @import("byte_code.zig").ByteCode;
+const Method = @import("vm.zig").Method;
+const Property = @import("vm.zig").Property;
 
 pub const CompileError = error{
     ScanError,
@@ -565,22 +568,9 @@ pub fn Compiler(comptime A: type) type {
                 .PRINT => {
                     try self.advance();
                     try self.consume(.LEFT_PARENTHESIS, "left parenthesis ('(')");
-                    var arity: u16 = 0;
-                    if (try self.match(.RIGHT_PARENTHESIS) == false) {
-                        while (true) {
-                            arity += 1;
-                            try self.expression();
-                            if (try self.match(.RIGHT_PARENTHESIS)) {
-                                break;
-                            }
-                            try self.consume(.COMMA, "parameter separator (',')");
-                        }
-                    }
-                    if (arity > 32) {
-                        return self.setErrorFmt(error.CompileError, "print supports up to 32 parameters, got: {d}\n", .{arity});
-                    }
+                    const arity = try self.parameterList(32);
                     try self.consumeSemicolon();
-                    try bc.opWithData(.PRINT, &.{@intCast(arity)});
+                    try bc.opWithData(.PRINT, &.{arity});
                 },
                 else => {
                     try self.expression();
@@ -865,21 +855,7 @@ pub fn Compiler(comptime A: type) type {
 
             try self.advance(); // consume '(
 
-            var arity: u16 = 0;
-            if (try self.match(.RIGHT_PARENTHESIS) == false) {
-                while (true) {
-                    arity += 1;
-                    if (arity > 255) {
-                        return self.setErrorMaxArity(name);
-                    }
-                    try self.expression();
-                    if (try self.match(.RIGHT_PARENTHESIS)) {
-                        break;
-                    }
-                    try self.consume(.COMMA, "parameter separator (',')");
-                }
-            }
-
+            const arity = try self.parameterList(255);
             if (CustomFunctionLookup.get(name)) |cf| {
                 if (cf.arity != arity) {
                     return self.setErrorWrongArity(name, cf.arity, @intCast(arity));
@@ -900,37 +876,106 @@ pub fn Compiler(comptime A: type) type {
             return self._byte_code.opWithData(.CALL, std.mem.asBytes(&gop.value_ptr.data_pos));
         }
 
-        fn dot(self: *Self, can_assign: bool) CompileError!void {
+        fn dot(self: *Self, _: bool) CompileError!void {
             try self.consume(.IDENTIFIER, "property name");
             const name = self._previous_token.value.IDENTIFIER;
 
-            var _code: ?i32 = null;
+            if (try self.match(.LEFT_PARENTHESIS)) {
+                return self.method(name);
+            }
+            return self.property(name);
+        }
+
+        fn method(self: *Self, name: []const u8) CompileError!void {
+            var _method: ?Method = null;
+
+            const arity = try self.parameterList(5);
+
             switch (name.len) {
                 3 => switch (@as(u24, @bitCast(name[0..3].*))) {
-                    asUint("len") => _code = -1,
-                    asUint("key") => _code = -2,
+                    asUint("pop") => _method = .POP,
+                    else => {},
+                },
+                4 => switch (@as(u32, @bitCast(name[0..4].*))) {
+                    asUint("last") => _method = .LAST,
+                    asUint("sort") => _method = .SORT,
                     else => {},
                 },
                 5 => switch (@as(u40, @bitCast(name[0..5].*))) {
-                    asUint("value") => _code = -3,
+                    asUint("first") => _method = .FIRST,
+                    else => {},
+                },
+                6 => switch (@as(u48, @bitCast(name[0..6].*))) {
+                    asUint("append") => _method = .APPEND,
+                    asUint("remove") => _method = .REMOVE,
+                    asUint("concat") => _method = .CONCAT,
+                    else => {},
+                },
+                7 => switch (@as(u56, @bitCast(name[0..7].*))) {
+                    asUint("indexOf") => _method = .INDEX_OF,
+                    else => {},
+                },
+                8 => switch (@as(u64, @bitCast(name[0..8].*))) {
+                    asUint("contains") => _method = .CONTAINS,
+                    asUint("removeAt") => _method = .REMOVE_AT,
                     else => {},
                 },
                 else => {},
             }
 
-            const code = _code orelse {
-                return self.setErrorFmt(error.CompileError, "'{s}' is not a valid property", .{name});
+            const m = _method orelse {
+                return self.setErrorFmt(error.CompileError, "'{s}' is not a valid method", .{name});
             };
 
-            const bc = &self._byte_code;
-            if (can_assign) {
-                // if (try self.match(.EQUAL)) {
-                //     try self.expression();
-                //     return bc.op(.INDEX_SET);
-                // }
+            try self.verifyMethodArity(m, arity);
+
+            var buf: [3]u8 = undefined;
+            const method_id: u16 = @intFromEnum(m);
+            buf[0] = arity;
+            @memcpy(buf[1..3], std.mem.asBytes(&method_id));
+            return self._byte_code.opWithData(.METHOD, &buf);
+        }
+
+        fn verifyMethodArity(self: *Self, m: Method, arity: u8) !void {
+            const expected: u8 = switch (m) {
+                .POP => 0,
+                .LAST => 0,
+                .FIRST => 0,
+                .APPEND => 1,
+                .REMOVE => 1,
+                .REMOVE_AT => 1,
+                .CONTAINS => 1,
+                .INDEX_OF => 1,
+                .SORT => 0,
+                .CONCAT => 1,
+            };
+
+            if (arity != expected) {
+                return self.setErrorWrongArity(m.name(), expected, arity);
             }
-            try bc.property(code);
-            return bc.op(.INDEX_GET);
+        }
+
+        fn property(self: *Self, name: []const u8) CompileError!void {
+            var _property: ?Property = null;
+            switch (name.len) {
+                3 => switch (@as(u24, @bitCast(name[0..3].*))) {
+                    asUint("len") => _property = .LEN,
+                    asUint("key") => _property = .KEY,
+                    else => {},
+                },
+                5 => switch (@as(u40, @bitCast(name[0..5].*))) {
+                    asUint("value") => _property = .VALUE,
+                    else => {},
+                },
+                else => {},
+            }
+
+            const p = _property orelse {
+                return self.setErrorFmt(error.CompileError, "'{s}' is not a valid field", .{name});
+            };
+
+            const property_id: u16 = @intFromEnum(p);
+            return self._byte_code.opWithData(.PROPERTY_GET, std.mem.asBytes(&property_id));
         }
 
         fn @"and"(self: *Self, _: bool) CompileError!void {
@@ -1054,6 +1099,26 @@ pub fn Compiler(comptime A: type) type {
                 }
             }
             return locals.len;
+        }
+
+        fn parameterList(self: *Self, max_arity: u8) !u8 {
+            if (try self.match(.RIGHT_PARENTHESIS)) {
+                return 0;
+            }
+            var arity: u8 = 0;
+            while (true) {
+                if (arity == max_arity) {
+                    try self.setErrorFmt(error.CompileError, "call supports up to {d} parameters, got: {d}", .{max_arity, arity});
+                    unreachable;
+                }
+                arity += 1;
+                try self.expression();
+                if (try self.match(.RIGHT_PARENTHESIS)) {
+                    break;
+                }
+                try self.consume(.COMMA, "parameter separator (',')");
+            }
+            return arity;
         }
 
         fn setExpectationError(self: *Self, comptime message: []const u8) CompileError!void {

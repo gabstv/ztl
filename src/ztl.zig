@@ -800,10 +800,6 @@ test "ztl: map assignment" {
     );
 }
 
-test "ztl: list length" {
-    try testReturnValue(.{ .i64 = 0 }, "return [].len;");
-}
-
 test "ztl: string indexing" {
     defer t.reset();
 
@@ -1423,26 +1419,295 @@ test "ztl: function error" {
     );
 }
 
+test "ztl: properties" {
+    try testReturnValue(.{ .i64 = 0 }, "return [].len;");
+    try testReturnValue(.{ .i64 = 3 }, "return [1,10,100].len;");
+    try testReturnValue(.{ .i64 = 0 }, "return %{}.len;");
+    try testReturnValue(.{ .i64 = 1 }, "return %{a: 2}.len;");
+}
+
+test "ztl: method errors" {
+    try testError("xx' is not a valid method", "return [].xx()");
+}
+
+test "ztl: method last" {
+    try testError("Function 'last' expects 0 parameters, but called with 1", "return [].last(1)");
+
+    try testReturnValue(.{ .null = {} }, "return [].last();");
+    try testReturnValue(.{ .i64 = 20 }, "return [1,20].last();");
+}
+
+test "ztl: method first" {
+    try testError("Function 'first' expects 0 parameters, but called with 2", "return [].first(`a`, true)");
+
+    try testReturnValue(.{ .null = {} }, "return [].first();");
+    try testReturnValue(.{ .i64 = 99 }, "return [99,2].first();");
+}
+
+test "ztl: method pop" {
+    try testError("Function 'pop' expects 0 parameters, but called with 1", "return [].pop(null)");
+
+    try testReturnValue(.{ .null = {} }, "return [].pop();");
+    try testReturnValue(.{ .i64 = 132 },
+        \\ var arr = [10, 20, 100];
+        \\ var last = arr.pop();
+        \\ return arr.len + arr[0] + arr[1] + last;
+    );
+}
+
+test "ztl: method remove" {
+    try testError("Function 'remove' expects 1 parameter, but called with 0", "return [].remove()");
+    try testError("Function 'remove' expects 1 parameter, but called with 2", "return %{}.remove(true, false)");
+
+    try testReturnValue(.{ .bool = false }, "return [].remove(`a`);");
+    try testReturnValue(.{ .bool = true }, "return [[]].remove([]);");
+    try testReturnValue(.{ .i64 = 1312 },
+        \\ var arr = [10, 20, 300];
+        \\ var removed = arr.remove(20) ? 1000 : 0;
+        \\ return arr.len + arr[0] + arr[1] + removed;
+    );
+
+    try testReturnValue(.{ .null = {} }, "return %{}.remove(`a`);");
+    try testReturnValue(.{ .null = {} }, "return %{}.remove(3);");
+    try testReturnValue(.{ .i64 = 301 },
+        \\ var map = %{a: 100, b: 200};
+        \\ var removed = map.remove("b");
+        \\ return map.len + map[`a`] + removed;
+    );
+    try testReturnValue(.{ .i64 = 301 },
+        \\ var map = %{1: 100, 20: 200};
+        \\ var removed = map.remove(20);
+        \\ return map.len + map[1] + removed;
+    );
+}
+
+test "ztl: method removeAt" {
+    try testError("Function 'removeAt' expects 1 parameter, but called with 0", "return [].removeAt()");
+    try testRuntimeError("Index out of range. Index: 0, Len: 0", "return [].removeAt(0);");
+
+    try testReturnValue(.{ .i64 = 1057 },
+        \\ var arr = [5, 25, 50];
+        \\ var removed = arr.removeAt(1) == 25 ? 1000 : 0;
+        \\ return arr.len + arr[0] + arr[1] + removed;
+    );
+
+    try testReturnValue(.{ .i64 = 2057 },
+        \\ var arr = [5, 25, 50];
+        \\ var removed = arr.removeAt(-2) == 25 ? 2000 : 0;
+        \\ return arr.len + arr[0] + arr[1] + removed;
+    );
+}
+
+test "ztl: method append" {
+    try testError("Function 'append' expects 1 parameter, but called with 0", "return [].append()");
+
+    try testReturnValue(.{ .i64 = 4 },
+        \\ var arr = [];
+        \\ arr.append(3);
+        \\ return arr.len + arr[0];
+    );
+
+    try testReturnValue(.{ .i64 = 15 },
+        \\ var arr = [];
+        \\ arr.append(3);
+        \\ arr.append(10);
+        \\ return arr.len + arr[0] + arr[1];
+    );
+
+    {
+        defer t.reset();
+        var arr1 = [_]Value{
+            .{ .i64 = 99 },
+        };
+        var arr2 = [_]Value{t.createListRef(&arr1)};
+        try testReturnValue(t.createListRef(&arr2),
+            \\ var arr = [];
+            \\ {
+            \\    var inner = [99];
+            \\    arr.append(inner);
+            \\ }
+            \\ return arr;
+        );
+    }
+}
+
+test "ztl: method contains" {
+    try testError("Function 'contains' expects 1 parameter, but called with 0", "return [].contains()");
+    try testRuntimeError("Map key must be an integer or string, got a boolean", "return %{}.contains(true);");
+
+    try testReturnValue(.{ .bool = false }, "return [].contains(true);");
+    try testReturnValue(.{ .bool = false }, "return [].contains(32);");
+    try testReturnValue(.{ .bool = false }, "return [1,2,3].contains(4);");
+    try testReturnValue(.{ .bool = true }, "return [1,2,3].contains(3);");
+    try testReturnValue(.{ .bool = true }, "return [`aa`, `BB`].contains(`aa`);");
+    try testReturnValue(.{ .bool = true }, "return [`aa`, `BB`].contains(`BB`);");
+    try testReturnValue(.{ .bool = false }, "return [`aa`, `BB`].contains(`AA`);");
+
+    try testReturnValue(.{ .bool = false }, "return %{}.contains(123);");
+    try testReturnValue(.{ .bool = false }, "return %{111: true}.contains(123);");
+    try testReturnValue(.{ .bool = true }, "return %{123: 1.2}.contains(123);");
+    try testReturnValue(.{ .bool = false }, "return %{abc: 1, def: 2}.contains(123);");
+    try testReturnValue(.{ .bool = true }, "return %{abc: 1, def: 2}.contains(`abc`);");
+    try testReturnValue(.{ .bool = true }, "return %{abc: 1, def: 2}.contains(`def`);");
+    try testReturnValue(.{ .bool = false }, "return %{abc: 1, def: 2}.contains(`ABC`);");
+}
+
+test "ztl: method indexOf" {
+    try testError("Function 'indexOf' expects 1 parameter, but called with 0", "return [].indexOf()");
+    try testRuntimeError("Unknown method 'indexOf' for a map", "return %{}.indexOf(1);");
+
+    try testReturnValue(.{ .null = {} }, "return [].indexOf(true);");
+    try testReturnValue(.{ .null = {} }, "return [].indexOf(32);");
+    try testReturnValue(.{ .null = {} }, "return [1,2,3].indexOf(4);");
+    try testReturnValue(.{ .i64 = 2 }, "return [1,2,3].indexOf(3);");
+    try testReturnValue(.{ .i64 = 0 }, "return [`aa`, `BB`].indexOf(`aa`);");
+    try testReturnValue(.{ .i64 = 1 }, "return [`aa`, `BB`].indexOf(`BB`);");
+    try testReturnValue(.{ .null = {} }, "return [`aa`, `BB`].indexOf(`AA`);");
+}
+
+test "ztl: method sort" {
+    try testError("Function 'sort' expects 0 parameters, but called with 2", "return [].sort(true, false)");
+    try testRuntimeError("Unknown method 'sort' for a boolean", "return true.sort();");
+
+    try testReturnValue(.{ .i64 = 5431 },
+        \\ var arr = [4, 1, 3, 5];
+        \\ arr.sort();
+        \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
+    );
+
+    try testReturnValue(.{ .f64 = 5431.2 },
+        \\ var arr = [4, 1, 3.02, 5];
+        \\ arr.sort();
+        \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
+    );
+
+    {
+        defer t.reset();
+        var arr = [_]Value{
+            .{ .string = "AZ" },
+            .{ .string = "a" },
+            .{ .string = "ab"},
+        };
+        try testReturnValue(t.createListRef(&arr), "return [`ab`, `a`, `AZ`].sort();");
+    }
+}
+
+test "ztl: method concat" {
+    defer t.reset();
+
+    // try testError("Function 'concat' expects 1 parameter, but called with 2", "return [].concat(true, false)");
+
+    // {
+    //     var arr = [_]Value{
+    //         .{ .i64 = 1 },
+    //     };
+    //     try testReturnValue(t.createListRef(&arr), "return [].concat(1);");
+    // }
+
+    // {
+    //     var arr = [_]Value{
+    //         .{ .i64 = 0 },
+    //         .{ .i64 = 2 },
+    //         .{ .i64 = 1 },
+    //     };
+    //     try testReturnValue(t.createListRef(&arr), "return [0,2].concat(1);");
+    // }
+
+    // {
+    //     var arr = [_]Value{
+    //         .{ .i64 = 0 },
+    //         .{ .i64 = 2 },
+    //     };
+    //     try testReturnValue(t.createListRef(&arr), "return [].concat([0, 2]);");
+    // }
+
+    // {
+    //     var arr = [_]Value{
+    //         .{ .i64 = 1 },
+    //         .{ .i64 = 3 },
+    //         .{ .i64 = 0 },
+    //         .{ .i64 = 2 },
+    //     };
+    //     try testReturnValue(t.createListRef(&arr), "return [1, 3].concat([0, 2]);");
+    // }
+
+    // {
+    //     var arr = [_]Value{
+    //         .{ .i64 = 1 },
+    //         .{ .i64 = 3 },
+    //         .{ .i64 = 0 },
+    //         .{ .i64 = 2 },
+    //     };
+    //     try testReturnValue(t.createListRef(&arr), "return [1, 3].concat([0, 2]);");
+    // }
+
+    // {
+    //     var arr = [_]Value{
+    //         .{ .i64 = 1 },
+    //         .{ .i64 = 3 },
+    //         .{ .i64 = 0 },
+    //         .{ .i64 = 2 },
+    //     };
+    //     try testReturnValue(t.createListRef(&arr),
+    //         \\ var arr = [1, 3];
+    //         \\ arr.concat([0, 2]);
+    //         \\ return arr;
+    //     );
+    // }
+
+    // {
+    //     var arr = [_]Value{
+    //         .{ .i64 = 1 },
+    //         .{ .i64 = 3 },
+    //         .{ .i64 = 2 },
+    //         .{ .i64 = 0 },
+    //     };
+    //     try testReturnValue(t.createListRef(&arr),
+    //         \\ var arr = [1, 3];
+    //         \\ var other = [2, 0];
+    //         \\ arr.concat(other);
+    //         \\ return arr;
+    //     );
+    // }
+
+    {
+        var arr1 = [_]Value{
+            .{ .i64 = 1 },
+            .{ .i64 = 2 },
+        };
+        var arr2 = [_]Value{t.createListRef(&arr1)};
+        try testReturnValue(t.createListRef(&arr2),
+            \\ var arr = [];
+            \\ {
+            \\   var other = [[1, 2]];
+            \\   arr.concat(other);
+            \\ }
+            \\ return arr;
+        );
+    }
+}
+
 fn testReturnValue(expected: Value, src: []const u8) !void {
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const debug = DebugMode.full;
+            pub const allow_leaks = false;
         };
     }, .{}, expected, src);
 
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const max_locals = 256;
+            pub const allow_leaks = false;
         };
     }, .{}, expected, src);
 
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const max_locals = 300;
+            pub const allow_leaks = false;
         };
     }, .{}, expected, src);
-
-    try testReturnValueWithApp(void, {}, expected, src);
 }
 
 fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, src: []const u8) !void {

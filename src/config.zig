@@ -11,6 +11,7 @@ const Defaults = struct {
     pub const initial_code_size: u32 = 512;
     pub const initial_data_size: u32 = 512;
     pub const deduplicate_string_literals: bool = true;
+    pub const allow_leaks: bool = true;
 };
 
 pub fn extract(comptime A: type, comptime field_name: []const u8) @TypeOf(@field(Defaults, field_name)) {

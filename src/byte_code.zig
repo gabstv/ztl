@@ -3,6 +3,8 @@ const ztl = @import("ztl.zig");
 
 const Allocator = std.mem.Allocator;
 const config = @import("config.zig");
+const Method = @import("vm.zig").Method;
+const Property = @import("vm.zig").Property;
 
 pub const VERSION: u8 = 0;
 
@@ -234,10 +236,6 @@ pub fn ByteCode(comptime App: type) type {
             return self.op(OpCode.CONSTANT_NULL);
         }
 
-        pub fn property(self: *Self, value: i32) !void {
-            try self.opWithData(.CONSTANT_PROPERTY, std.mem.asBytes(&value));
-        }
-
         pub fn initializeArray(self: *Self, value_count: u32) !void {
             var buf: [5]u8 = undefined;
             buf[0] = @intFromEnum(OpCode.Initialize.ARRAY);
@@ -440,11 +438,6 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 const string_end = @as(u32, @bitCast(data[header_start..header_end][0..4].*));
                 try std.fmt.format(writer, " {s}\n", .{data[header_end..string_end]});
             },
-            .CONSTANT_PROPERTY => {
-                const value = @as(*align(1) const i32, @ptrCast(code[i..(i + 4)])).*;
-                try std.fmt.format(writer, " {d}\n", .{value});
-                i += 4;
-            },
             .JUMP => {
                 const relative = @as(i16, @bitCast(code[i .. i + 2][0..2].*));
                 const target: u32 = @intCast(@as(i32, @intCast(i)) + relative);
@@ -466,6 +459,19 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
                 try std.fmt.format(writer, " {s}@{d}\n", .{variable_names.get(idx) orelse "", idx});
                 i += SL;
+            },
+            .PROPERTY_GET => {
+                const prop: Property = @enumFromInt(@as(u16, @bitCast(code[i .. i + 2][0..2].*)));
+                try std.fmt.format(writer, " {s}\n", .{@tagName(prop)});
+                i += 2;
+            },
+            .METHOD => {
+                const arity = code[i];
+                i += 1;
+
+                const m: Method = @enumFromInt(@as(u16, @bitCast(code[i .. i + 2][0..2].*)));
+                i += 2;
+                try std.fmt.format(writer, " {s}({d})\n", .{@tagName(m), arity});
             },
             .INCR => {
                 // i += 0 is pretty rare. So use value 0 for -1, which is more
@@ -539,7 +545,6 @@ pub const OpCode = enum(u8) {
     CONSTANT_F64,
     CONSTANT_I64,
     CONSTANT_NULL,
-    CONSTANT_PROPERTY,
     CONSTANT_STRING,
     DIVIDE,
     EQUAL,
@@ -556,12 +561,14 @@ pub const OpCode = enum(u8) {
     JUMP_IF_FALSE,
     JUMP_IF_FALSE_POP,
     LESSER,
+    METHOD,
     MODULUS,
     MULTIPLY,
     NEGATE,
     NOT,
     OUTPUT,
     POP,
+    PROPERTY_GET,
     PRINT,
     PUSH,
     RETURN,
