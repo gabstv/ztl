@@ -1,8 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const ArenaAllocator = std.heap.ArenaAllocator;
-
 const Value = @import("value.zig").Value;
 const KeyValue = @import("value.zig").KeyValue;
 
@@ -22,48 +20,32 @@ pub fn VM(comptime App: type) type {
     return struct {
         app: App,
 
-        _arena: std.heap.ArenaAllocator,
+        _allocator: Allocator,
         _ref_pool: RefPool,
 
         _stack: Stack = .{},
 
         _frames: [MAX_CALL_FRAMES]Frame = undefined,
 
-        // execution error
-        err: ?Error = null,
+        err: ?[]const u8 = null,
 
         const LocalIndex = config.LocalType(App);
         const SL = @sizeOf(LocalIndex);
 
         const Self = @This();
 
+        // we expect allocator tp be an arena
         pub fn init(allocator: Allocator, app: App) Self {
             return .{
                 .app = app,
+                ._allocator = allocator,
                 ._ref_pool = RefPool.init(allocator),
-                ._arena = std.heap.ArenaAllocator.init(allocator),
             };
-        }
-
-        pub fn deinit(self: *Self) void {
-            self._arena.deinit();
-            if (builtin.is_test) {
-                if (self._ref_pool.count != 0) {
-                    std.debug.print("ref pool leak: {d}\n", .{self._ref_pool.count});
-                    @panic("Memory Leak");
-                }
-            }
-            self._ref_pool.deinit();
-        }
-
-        pub fn reset(self: *Self, retain_with_limit: usize) void {
-            _ = self._arena.reset(.{.retain_with_limit = retain_with_limit});
-            _ = self._ref_pool.reset(.{.retain_capacity = {}});
         }
 
         // See template.zig's hack around globals to see why we're doing this
         pub fn injectLocal(self: *Self, value: Value) !void {
-            return self._stack.append(self._arena.allocator(), value);
+            return self._stack.append(self._allocator, value);
         }
 
         pub fn run(self: *Self, byte_code: []const u8, writer: anytype) !Value {
@@ -87,7 +69,8 @@ pub fn VM(comptime App: type) type {
             ip += 9 + @as(u32, @bitCast(ip[5..9].*));
 
             const ref_pool = &self._ref_pool;
-            const allocator = self._arena.allocator();
+            const allocator = self._allocator;
+
             errdefer if (comptime builtin.is_test) {
                 // we can skip doing this in non-test since our pool_ref
                 // is an arena which will all get cleaned up when pool_ref.deinit()
@@ -179,14 +162,20 @@ pub fn VM(comptime App: type) type {
                         switch (v.*) {
                             .i64 => |n| v.i64 = -n,
                             .f64 => |n| v.f64 = -n,
-                            else => return self.setErrorFmt(error.TypeError, "Cannot negate non-numeric value: -{s}", .{v.*}),
+                            else => {
+                                try self.setErrorFmt("Cannot negate non-numeric value: -{s}", .{v.*});
+                                return error.TypeError;
+                            },
                         }
                     },
                     .NOT => {
                         var v = &stack.items[stack.items.len - 1];
                         switch (v.*) {
                             .bool => |b| v.bool = !b,
-                            else => return self.setErrorFmt(error.TypeError, "Cannot inverse non-boolean value: !{s}", .{v.*}),
+                            else => {
+                                try self.setErrorFmt("Cannot inverse non-boolean value: !{s}", .{v.*});
+                                return error.TypeError;
+                            },
                         }
                     },
                     .EQUAL => try self.comparison(stack, &equal),
@@ -447,7 +436,8 @@ pub fn VM(comptime App: type) type {
                         frame_count += 1;
 
                         if (frame_count == frames.len) {
-                            return self.setErrorFmt(error.StackOverflow, "Maximum call depth ({d}) reached", .{ frames.len });
+                            try self.setErrorFmt("Maximum call depth ({d}) reached", .{ frames.len });
+                            return error.StackOverflow;
                         }
 
                         frames[frame_count] = .{
@@ -457,7 +447,8 @@ pub fn VM(comptime App: type) type {
                     },
                     .CALL_ZIG => {
                         if (std.meta.hasMethod(App, "call") == false) {
-                            return self.setError(error.UsageError, @typeName(App) ++ "has no 'call' method");
+                            self.setError(@typeName(App) ++ "has no 'call' method");
+                            return error.UsageError;
                         }
                         const arity = ip[0];
                         ip += 1;
@@ -524,7 +515,12 @@ pub fn VM(comptime App: type) type {
             }
         }
 
-        fn arithmetic(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) anyerror!Value) !void {
+        const ArithmeticError = error {
+            TypeError,
+            OutOfMemory,
+        };
+
+        fn arithmetic(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) ArithmeticError!Value) !void {
             var values = stack.items;
             std.debug.assert(values.len >= 2);
             const right_index = values.len - 1;
@@ -535,7 +531,7 @@ pub fn VM(comptime App: type) type {
             stack.items.len = right_index;
         }
 
-        fn add(self: *Self, left: Value, right: Value) anyerror!Value {
+        fn add(self: *Self, left: Value, right: Value) ArithmeticError!Value {
             switch (left) {
                 .i64 => |l| switch (right) {
                     .i64 => |r| return .{ .i64 = l + r },
@@ -549,10 +545,11 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot add non-numeric value: {s} + {s}", .{ left, right });
+            try self.setErrorFmt("Cannot add non-numeric value: {s} + {s}", .{ left, right });
+            return error.TypeError;
         }
 
-        fn subtract(self: *Self, left: Value, right: Value) anyerror!Value {
+        fn subtract(self: *Self, left: Value, right: Value) ArithmeticError!Value {
             switch (left) {
                 .i64 => |l| switch (right) {
                     .i64 => |r| return .{ .i64 = l - r },
@@ -566,10 +563,11 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot subtract non-numeric value: {s} - {s}", .{ left, right });
+            try self.setErrorFmt("Cannot subtract non-numeric value: {s} - {s}", .{ left, right });
+            return error.TypeError;
         }
 
-        fn multiply(self: *Self, left: Value, right: Value) anyerror!Value {
+        fn multiply(self: *Self, left: Value, right: Value) ArithmeticError!Value {
             switch (left) {
                 .i64 => |l| switch (right) {
                     .i64 => |r| return .{ .i64 = l * r },
@@ -583,10 +581,11 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot multiply non-numeric value: {s} - {s}", .{ left, right });
+            try self.setErrorFmt("Cannot multiply non-numeric value: {s} - {s}", .{ left, right });
+            return error.TypeError;
         }
 
-        fn divide(self: *Self, left: Value, right: Value) anyerror!Value {
+        fn divide(self: *Self, left: Value, right: Value) ArithmeticError!Value {
             switch (left) {
                 .i64 => |l| switch (right) {
                     .i64 => |r| return .{ .i64 = @divTrunc(l, r) },
@@ -600,10 +599,11 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot divide non-numeric value: {s} - {s}", .{ left, right });
+            try self.setErrorFmt("Cannot divide non-numeric value: {s} - {s}", .{ left, right });
+            return error.TypeError;
         }
 
-        fn modulus(self: *Self, left: Value, right: Value) anyerror!Value {
+        fn modulus(self: *Self, left: Value, right: Value) ArithmeticError!Value {
             switch (left) {
                 .i64 => |l| switch (right) {
                     .i64 => |r| return .{ .i64 = @mod(l, r) },
@@ -611,10 +611,15 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot take remainder of non-integer value: {s} - {s}", .{ left, right });
+            try self.setErrorFmt("Cannot take remainder of non-integer value: {s} - {s}", .{ left, right });
+            return error.TypeError;
         }
 
-        fn comparison(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) anyerror!bool) !void {
+        const ComparisonError = error {
+            TypeError,
+            OutOfMemory,
+        };
+        fn comparison(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) ComparisonError!bool) !void {
             var values = stack.items;
 
             const right_index = values.len - 1;
@@ -634,13 +639,14 @@ pub fn VM(comptime App: type) type {
             stack.items.len = right_index;
         }
 
-        fn equal(self: *Self, left: Value, right: Value) anyerror!bool {
+        fn equal(self: *Self, left: Value, right: Value) ComparisonError!bool {
             return left.equal(right) catch {
-                return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} == {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
+                try self.setErrorFmt("Incompatible type comparison: {s} == {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
+                return error.TypeError;
             };
         }
 
-        fn greater(self: *Self, left: Value, right: Value) anyerror!bool {
+        fn greater(self: *Self, left: Value, right: Value) ComparisonError!bool {
             switch (left) {
                 .f64 => |l| switch (right) {
                     .f64 => |r| return l > r,
@@ -658,10 +664,12 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} > {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
+            try self.setErrorFmt("Incompatible type comparison: {s} > {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
+            return error.TypeError;
+
         }
 
-        fn lesser(self: *Self, left: Value, right: Value) anyerror!bool {
+        fn lesser(self: *Self, left: Value, right: Value) ComparisonError!bool {
             switch (left) {
                 .f64 => |l| switch (right) {
                     .f64 => |r| return l < r,
@@ -679,7 +687,8 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
+            try self.setErrorFmt("Incompatible type comparison: {s} < {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
+            return error.TypeError;
         }
 
         fn getIndexed(self: *Self, ref_pool: *RefPool, target: Value, index: Value) !Value {
@@ -688,7 +697,8 @@ pub fn VM(comptime App: type) type {
                 .string => |n| return self.getStringIndex(target, n),
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()});
+            try self.setErrorFmt("Invalid index or property type, got {s}", .{index.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn getNumericIndex(self: *Self, ref_pool: *RefPool, target: Value, index: i64) !Value {
@@ -705,7 +715,8 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()});
+            try self.setErrorFmt("Cannot index {s}", .{target.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn getStringIndex(self: *Self, target: Value, index: []const u8) !Value {
@@ -716,7 +727,8 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()});
+            try self.setErrorFmt("Cannot index {s} with a string key", .{target.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn setIndexed(self: *Self, allocator: Allocator, target: Value, index: Value, value: Value) !void {
@@ -725,7 +737,8 @@ pub fn VM(comptime App: type) type {
                 .string => |n| return self.setStringIndex(allocator, target, n, value),
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()});
+            try self.setErrorFmt("Invalid index or property type, got {s}", .{index.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn setNumericIndex(self: *Self, allocator: Allocator, target: Value, index: i64, value: Value) !void {
@@ -744,7 +757,8 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()});
+            try self.setErrorFmt("Cannot index {s}", .{target.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn setStringIndex(self: *Self, allocator: Allocator, target: Value, index: []const u8, value: Value) !void {
@@ -755,7 +769,8 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()});
+            try self.setErrorFmt("Cannot index {s} with a string key", .{target.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn setMapIndex(self: *Self, allocator: Allocator, map: *Value.Map, key: KeyValue, value: Value) !void {
@@ -772,7 +787,8 @@ pub fn VM(comptime App: type) type {
                 .string => |n| return self.incrementStringIndexed(target, n, incr),
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Invalid index or property type, got {s}", .{index.friendlyArticleName()});
+            try self.setErrorFmt("Invalid index or property type, got {s}", .{index.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn incrementNumericIndexed(self: *Self, target: Value, index: i64, incr: Value) !Value {
@@ -787,7 +803,10 @@ pub fn VM(comptime App: type) type {
                         return result;
                     },
                     .map => |*map| {
-                        const value = map.getPtr(.{.i64 = index}) orelse return self.setErrorFmt(error.MissingKey, "Map does not contain key '{d}'", .{index});
+                        const value = map.getPtr(.{.i64 = index}) orelse {
+                            try self.setErrorFmt("Map does not contain key '{d}'", .{index});
+                            return error.MissingKey;
+                    };
                         value.* = try self.add(value.*, incr);
                         return value.*;
                     },
@@ -795,14 +814,18 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot index {s}", .{target.friendlyArticleName()});
+            try self.setErrorFmt("Cannot index {s}", .{target.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn incrementStringIndexed(self: *Self, target: Value, index: []const u8, incr: Value) !Value {
             switch (target) {
                 .ref => |ref| switch (ref.value) {
                     .map => |*map| {
-                        const value = map.getPtr(.{.string = index}) orelse return self.setErrorFmt(error.MissingKey, "Map does not contain key '{d}'", .{index});
+                        const value = map.getPtr(.{.string = index}) orelse {
+                            try self.setErrorFmt("Map does not contain key '{d}'", .{index});
+                            return error.MissingKey;
+                        };
                         value.* = try self.add(value.*, incr);
                         return value.*;
                     },
@@ -810,13 +833,15 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot index {s} with a string key", .{target.friendlyArticleName()});
+            try self.setErrorFmt("Cannot index {s} with a string key", .{target.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn resolveScalarIndex(self: *Self, len: usize, index: i64) !usize {
             if (index >= 0) {
                 if (index >= len) {
-                    return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{ index, len });
+                    try self.setErrorFmt("Index out of range. Index: {d}, Len: {d}", .{ index, len });
+                    return error.OutOfRange;
                 }
                 return @intCast(index);
             }
@@ -824,7 +849,8 @@ pub fn VM(comptime App: type) type {
             // index is negative
             const abs_index = @as(i64, @intCast(len)) + index;
             if (abs_index < 0) {
-                return self.setErrorFmt(error.OutOfRange, "Index out of range. Index: {d}, Len: {d}", .{ index, len });
+                try self.setErrorFmt("Index out of range. Index: {d}, Len: {d}", .{ index, len });
+                return error.OutOfRange;
             }
             return @intCast(abs_index);
         }
@@ -849,7 +875,8 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Unknown property '{s}' for {s}", .{ prop.name(), target.friendlyArticleName() });
+            try self.setErrorFmt("Unknown property '{s}' for {s}", .{ prop.name(), target.friendlyArticleName() });
+            return error.TypeError;
         }
 
         fn callMethod(self: *Self, allocator: Allocator, target: Value, method: Method, args: []Value) !Value {
@@ -878,7 +905,8 @@ pub fn VM(comptime App: type) type {
                         .REMOVE_AT => {
                             const value = args[0];
                             if (value != .i64) {
-                                return self.setErrorFmt(error.TypeError, "list.removeAt index must be an integer, got {s}", .{value.friendlyArticleName() });
+                                try self.setErrorFmt("list.removeAt index must be an integer, got {s}", .{value.friendlyArticleName() });
+                                return error.TypeError;
                             }
                             const index = try self.resolveScalarIndex(list.items.len, value.i64);
                             return list.orderedRemove(@intCast(index));
@@ -935,7 +963,8 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Unknown method '{s}' for {s}", .{ method.name(), target.friendlyArticleName() });
+            try self.setErrorFmt("Unknown method '{s}' for {s}", .{ method.name(), target.friendlyArticleName() });
+            return error.TypeError;
         }
 
         fn toIterator(self: *Self, ref_pool: *RefPool, value: Value) !Value {
@@ -955,7 +984,8 @@ pub fn VM(comptime App: type) type {
                 },
                 else => {},
             }
-            return self.setErrorFmt(error.TypeError, "Cannot iterate over {s}", .{value.friendlyArticleName()});
+            try self.setErrorFmt("Cannot iterate over {s}", .{value.friendlyArticleName()});
+            return error.TypeError;
         }
 
         fn iterateNext(ref_pool: *RefPool, ref: *Value.Ref) !?Value {
@@ -979,20 +1009,12 @@ pub fn VM(comptime App: type) type {
             }
         }
 
-        fn setErrorFmt(self: *Self, err: anyerror, comptime fmt: []const u8, args: anytype) anyerror {
-            self.err = .{
-                .err = err,
-                .desc = try std.fmt.allocPrint(self._arena.allocator(), fmt, args),
-            };
-            return err;
+        fn setErrorFmt(self: *Self, comptime fmt: []const u8, args: anytype) error{OutOfMemory}!void {
+            self.err = try std.fmt.allocPrint(self._allocator, fmt, args);
         }
 
-        fn setError(self: *Self, err: anyerror, desc: []const u8) anyerror {
-            self.err = .{
-                .err = err,
-                .desc = desc,
-            };
-            return err;
+        fn setError(self: *Self, desc: []const u8) void {
+            self.err = desc;
         }
 
         pub fn createRef(self: *Self) !*Value.Ref {
@@ -1024,6 +1046,27 @@ pub fn VM(comptime App: type) type {
             }
 
             stack.items.len = release_start;
+        }
+
+        fn releaseRef(self: *Self, ref: *Value.Ref) void {
+            const count = ref.count;
+            if (count > 1) {
+                ref.count = count - 1;
+                return;
+            }
+
+            switch (ref.value) {
+                .map_iterator => |it| self.releaseRef(it.ref),
+                .list_iterator => |it| self.releaseRef(it.ref),
+                .list => |list| if (comptime ALLOW_LEAKS == false) for (list.items) |value| {
+                    self.release(value);
+                },
+                .map => |map| if (comptime ALLOW_LEAKS == false) for (map.values()) |value| {
+                    self.release(value);
+                },
+                else => {},
+            }
+            self._ref_pool.destroy(ref);
         }
 
         pub fn createValue(self: *Self, zig: anytype) !Value {
@@ -1074,9 +1117,8 @@ pub fn VM(comptime App: type) type {
                             return .{.string = zig};
                         }
 
-                        const allocator = self._arena.allocator();
                         var list: Value.List = .{};
-                        try list.ensureTotalCapacity(allocator, slice.len);
+                        try list.ensureTotalCapacity(self._allocator, slice.len);
                         for (slice) |v| {
                             list.appendAssumeCapacity(try self.createValue(v));
                         }
@@ -1119,33 +1161,14 @@ pub fn VM(comptime App: type) type {
             }
         }
 
-        fn releaseRef(self: *Self, ref: *Value.Ref) void {
-            const count = ref.count;
-            if (count > 1) {
-                ref.count = count - 1;
-                return;
-            }
-
-            switch (ref.value) {
-                .map_iterator => |it| self.releaseRef(it.ref),
-                .list_iterator => |it| self.releaseRef(it.ref),
-                .list => |list| if (comptime ALLOW_LEAKS == false) for (list.items) |value| {
-                    self.release(value);
-                },
-                .map => |map| if (comptime ALLOW_LEAKS == false) for (map.values()) |value| {
-                    self.release(value);
-                },
-                else => {},
-            }
-
-            self._ref_pool.destroy(ref);
-        }
-
         fn valueToMapKey(self: *Self, value: Value) !KeyValue {
             switch (value) {
                 .i64 => |v| return .{.i64 = v},
                 .string => |v| return .{.string = v},
-                else => return self.setErrorFmt(error.TypeError, "Map key must be an integer or string, got {s}", .{value.friendlyArticleName() }),
+                else => {
+                    try self.setErrorFmt("Map key must be an integer or string, got {s}", .{value.friendlyArticleName() });
+                    return error.TypeError;
+                },
             }
         }
     };
@@ -1196,11 +1219,6 @@ pub const Method = enum(u16) {
 const Frame = struct {
     ip: [*]const u8,
     frame_pointer: usize = undefined,
-};
-
-pub const Error = struct {
-    err: anyerror,
-    desc: []const u8,
 };
 
 const DebugRefPool = struct {

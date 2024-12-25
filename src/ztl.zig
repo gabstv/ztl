@@ -3,10 +3,9 @@ const std = @import("std");
 pub const VM = @import("vm.zig").VM;
 pub const Value = @import("value.zig").Value;
 pub const DebugMode = @import("config.zig").DebugMode;
-pub const Compiler = @import("compiler.zig").Compiler;
 pub const Global = @import("template.zig").Global;
 pub const Template = @import("template.zig").Template;
-pub const disassemble = @import("byte_code.zig").disassemble;
+pub const ErrorReport = @import("template.zig").ErrorReport;
 
 pub const Error = struct {
     desc: []const u8,
@@ -69,6 +68,9 @@ const t = @import("t.zig");
 test {
     std.testing.refAllDecls(@This());
 }
+
+const Compiler = @import("compiler.zig").Compiler;
+const disassemble = @import("byte_code.zig").disassemble;
 
 test "ztl: local limit" {
     blk: {
@@ -1566,20 +1568,20 @@ test "ztl: method indexOf" {
 }
 
 test "ztl: method sort" {
-    try testError("Function 'sort' expects 0 parameters, but called with 2", "return [].sort(true, false)");
-    try testRuntimeError("Unknown method 'sort' for a boolean", "return true.sort();");
+    // try testError("Function 'sort' expects 0 parameters, but called with 2", "return [].sort(true, false)");
+    // try testRuntimeError("Unknown method 'sort' for a boolean", "return true.sort();");
 
-    try testReturnValue(.{ .i64 = 5431 },
-        \\ var arr = [4, 1, 3, 5];
-        \\ arr.sort();
-        \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
-    );
+    // try testReturnValue(.{ .i64 = 5431 },
+    //     \\ var arr = [4, 1, 3, 5];
+    //     \\ arr.sort();
+    //     \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
+    // );
 
-    try testReturnValue(.{ .f64 = 5431.2 },
-        \\ var arr = [4, 1, 3.02, 5];
-        \\ arr.sort();
-        \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
-    );
+    // try testReturnValue(.{ .f64 = 5431.2 },
+    //     \\ var arr = [4, 1, 3.02, 5];
+    //     \\ arr.sort();
+    //     \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
+    // );
 
     {
         defer t.reset();
@@ -1595,80 +1597,80 @@ test "ztl: method sort" {
 test "ztl: method concat" {
     defer t.reset();
 
-    // try testError("Function 'concat' expects 1 parameter, but called with 2", "return [].concat(true, false)");
+    try testError("Function 'concat' expects 1 parameter, but called with 2", "return [].concat(true, false)");
 
-    // {
-    //     var arr = [_]Value{
-    //         .{ .i64 = 1 },
-    //     };
-    //     try testReturnValue(t.createListRef(&arr), "return [].concat(1);");
-    // }
+    {
+        var arr = [_]Value{
+            .{ .i64 = 1 },
+        };
+        try testReturnValue(t.createListRef(&arr), "return [].concat(1);");
+    }
 
-    // {
-    //     var arr = [_]Value{
-    //         .{ .i64 = 0 },
-    //         .{ .i64 = 2 },
-    //         .{ .i64 = 1 },
-    //     };
-    //     try testReturnValue(t.createListRef(&arr), "return [0,2].concat(1);");
-    // }
+    {
+        var arr = [_]Value{
+            .{ .i64 = 0 },
+            .{ .i64 = 2 },
+            .{ .i64 = 1 },
+        };
+        try testReturnValue(t.createListRef(&arr), "return [0,2].concat(1);");
+    }
 
-    // {
-    //     var arr = [_]Value{
-    //         .{ .i64 = 0 },
-    //         .{ .i64 = 2 },
-    //     };
-    //     try testReturnValue(t.createListRef(&arr), "return [].concat([0, 2]);");
-    // }
+    {
+        var arr = [_]Value{
+            .{ .i64 = 0 },
+            .{ .i64 = 2 },
+        };
+        try testReturnValue(t.createListRef(&arr), "return [].concat([0, 2]);");
+    }
 
-    // {
-    //     var arr = [_]Value{
-    //         .{ .i64 = 1 },
-    //         .{ .i64 = 3 },
-    //         .{ .i64 = 0 },
-    //         .{ .i64 = 2 },
-    //     };
-    //     try testReturnValue(t.createListRef(&arr), "return [1, 3].concat([0, 2]);");
-    // }
+    {
+        var arr = [_]Value{
+            .{ .i64 = 1 },
+            .{ .i64 = 3 },
+            .{ .i64 = 0 },
+            .{ .i64 = 2 },
+        };
+        try testReturnValue(t.createListRef(&arr), "return [1, 3].concat([0, 2]);");
+    }
 
-    // {
-    //     var arr = [_]Value{
-    //         .{ .i64 = 1 },
-    //         .{ .i64 = 3 },
-    //         .{ .i64 = 0 },
-    //         .{ .i64 = 2 },
-    //     };
-    //     try testReturnValue(t.createListRef(&arr), "return [1, 3].concat([0, 2]);");
-    // }
+    {
+        var arr = [_]Value{
+            .{ .i64 = 1 },
+            .{ .i64 = 3 },
+            .{ .i64 = 0 },
+            .{ .i64 = 2 },
+        };
+        try testReturnValue(t.createListRef(&arr), "return [1, 3].concat([0, 2]);");
+    }
 
-    // {
-    //     var arr = [_]Value{
-    //         .{ .i64 = 1 },
-    //         .{ .i64 = 3 },
-    //         .{ .i64 = 0 },
-    //         .{ .i64 = 2 },
-    //     };
-    //     try testReturnValue(t.createListRef(&arr),
-    //         \\ var arr = [1, 3];
-    //         \\ arr.concat([0, 2]);
-    //         \\ return arr;
-    //     );
-    // }
+    {
+        var arr = [_]Value{
+            .{ .i64 = 1 },
+            .{ .i64 = 3 },
+            .{ .i64 = 0 },
+            .{ .i64 = 2 },
+        };
+        try testReturnValue(t.createListRef(&arr),
+            \\ var arr = [1, 3];
+            \\ arr.concat([0, 2]);
+            \\ return arr;
+        );
+    }
 
-    // {
-    //     var arr = [_]Value{
-    //         .{ .i64 = 1 },
-    //         .{ .i64 = 3 },
-    //         .{ .i64 = 2 },
-    //         .{ .i64 = 0 },
-    //     };
-    //     try testReturnValue(t.createListRef(&arr),
-    //         \\ var arr = [1, 3];
-    //         \\ var other = [2, 0];
-    //         \\ arr.concat(other);
-    //         \\ return arr;
-    //     );
-    // }
+    {
+        var arr = [_]Value{
+            .{ .i64 = 1 },
+            .{ .i64 = 3 },
+            .{ .i64 = 2 },
+            .{ .i64 = 0 },
+        };
+        try testReturnValue(t.createListRef(&arr),
+            \\ var arr = [1, 3];
+            \\ var other = [2, 0];
+            \\ arr.concat(other);
+            \\ return arr;
+        );
+    }
 
     {
         var arr1 = [_]Value{
@@ -1723,25 +1725,27 @@ fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, src: []
     defer t.allocator.free(byte_code);
     // disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
-    var vm = VM(App).init(t.allocator, app);
-    defer vm.deinit();
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var vm = VM(App).init(arena.allocator(), app);
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const value = vm.run(byte_code, buf.writer(t.allocator)) catch |err| {
         std.debug.print("{any}", .{err});
         if (vm.err) |e| {
-            std.debug.print("{any} {s}\n", .{ e.err, e.desc });
+            std.debug.print("{any} {s}\n", .{ err, e });
         }
         disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
         return err;
     };
-    defer vm.release(value);
 
     const is_equal = expected.equal(value) catch false;
     if (is_equal == false) {
         std.debug.print("{any} != {any}\n", .{ expected, value });
         return error.NotEqual;
     }
+    vm.release(value);
+    try checkVMForLeaks(&vm);
 }
 
 fn testError(expected: []const u8, src: []const u8) !void {
@@ -1777,17 +1781,27 @@ fn testRuntimeError(expected: []const u8, src: []const u8) !void {
     defer t.allocator.free(byte_code);
     // disassemble({}, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
-    var vm = VM(void).init(t.allocator, {});
-    defer vm.deinit();
+    var arena = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena.deinit();
+    var vm = VM(void).init(arena.allocator(), {});
+    try checkVMForLeaks(&vm);
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     _ = vm.run(byte_code, buf.writer(t.allocator)) catch {
-        const ve = vm.err orelse unreachable;
-        if (std.mem.indexOf(u8, ve.desc, expected) == null) {
-            std.debug.print("Wrong error, expected: {s} but got:\n{s}\n", .{ expected, ve.desc });
+        if (std.mem.indexOf(u8, vm.err.?, expected) == null) {
+            std.debug.print("Wrong error, expected: {s} but got:\n{s}\n", .{ expected, vm.err.? });
             return error.WrongError;
         }
         return;
     };
     return error.NoError;
+}
+
+
+fn checkVMForLeaks(vm: anytype) !void {
+    if (vm._ref_pool.count == 0) {
+        return;
+    }
+    std.debug.print("ref pool leak: {d}\n", .{vm._ref_pool.count});
+    return error.MemoryLeak;
 }

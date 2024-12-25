@@ -1,14 +1,13 @@
 const std = @import("std");
 const ztl = @import("ztl.zig");
 
-const VM = ztl.VM;
 const Value = ztl.Value;
-const Error = ztl.Error;
-const Compiler = ztl.Compiler;
 
+const VM = @import("vm.zig").VM;
 const config = @import("config.zig");
 const Token = @import("scanner.zig").Token;
 const Scanner = @import("scanner.zig").Scanner;
+const Compiler = @import("compiler.zig").Compiler;
 
 const Allocator = std.mem.Allocator;
 const MemoryPool = std.heap.MemoryPool;
@@ -20,7 +19,8 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 pub fn Template(comptime App: type) type {
     return struct {
         app: App,
-        err: ?Error,
+        err: ?[]const u8,
+        allocator: Allocator,
         arena: ArenaAllocator,
         globals: [][]const u8,
         byte_code: []const u8,
@@ -33,6 +33,7 @@ pub fn Template(comptime App: type) type {
                 .err = null,
                 .globals = &.{},
                 .byte_code = "",
+                .allocator = allocator,
                 .arena = ArenaAllocator.init(allocator),
             };
         }
@@ -42,7 +43,7 @@ pub fn Template(comptime App: type) type {
         }
 
         pub fn compile(self: *Self, src: []const u8) !void {
-            var build_arena = ArenaAllocator.init(self.arena.child_allocator);
+            var build_arena = ArenaAllocator.init(self.allocator);
             defer build_arena.deinit();
 
             const build_allocator = build_arena.allocator();
@@ -95,15 +96,7 @@ pub fn Template(comptime App: type) type {
             var compiler = try Compiler(App).init(build_allocator);
             compiler.compile(zt_src, .{.force_locals = self.globals}) catch |err| {
                 if (compiler.err) |ce| {
-                    self.err = .{
-                        .position = ce.position,
-                        .desc = try template_arena.dupe(u8, ce.desc),
-                    };
-                } else {
-                    self.err = .{
-                        .position = .{},
-                        .desc = @errorName(err),
-                    };
+                    self.err = try template_arena.dupe(u8, ce.desc);
                 }
                 return err;
             };
@@ -112,7 +105,7 @@ pub fn Template(comptime App: type) type {
         }
 
         pub fn translateToZt(self: *Self, src: []const u8) !ZtSource {
-            var arena = ArenaAllocator.init(self.arena.child_allocator);
+            var arena = ArenaAllocator.init(self.allocator);
             const zt_src = try self._translateToZt(arena.allocator(), src);
 
             return .{
@@ -121,22 +114,21 @@ pub fn Template(comptime App: type) type {
             };
         }
 
-        pub fn render(self: *Self, allocator: Allocator, writer: anytype, args: anytype) !void {
-            var vm = VM(App).init(allocator, self.app);
-            defer vm.deinit();
+        pub fn render(self: *Self, writer: anytype, globals: anytype, opts: RenderOpts) !void {
+            const allocator = opts.allocator orelse self.allocator;
+            var arena = ArenaAllocator.init(allocator);
+            defer arena.deinit();
 
-            return self.renderOnVM(&vm, writer, args);
-        }
+            var vm = VM(App).init(arena.allocator(), self.app);
 
-        pub fn renderOnVM(self: *Self, vm: *VM(App), writer: anytype, globals: anytype) !void {
             const T = @TypeOf(globals);
-
             if (T == []Global) {
                 std.mem.sort(Global, globals, {}, struct {
                     fn lessThan(_: void, lhs: Global, rhs: Global) bool {
                         return std.mem.order(u8, lhs.@"0", rhs.@"0") == .lt;
                     }
                 }.lessThan);
+
                 for (globals) |g| {
                     try vm.injectLocal(g.@"1");
                 }
@@ -152,10 +144,9 @@ pub fn Template(comptime App: type) type {
                     };
                     inline for(field_names) |name| {
                         const value = vm.createValue(@field(globals, name)) catch {
-                            self.err = .{
-                                .position = null,
-                                .desc = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(globals, name))),
-                            };
+                            if (opts.error_report) |er| {
+                                er.message = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(globals, name)));
+                            }
                             return error.InvalidArgument;
                         };
                         try vm.injectLocal(value);
@@ -164,11 +155,21 @@ pub fn Template(comptime App: type) type {
                 else => @compileError("globals must be a struct or an []ztl.Global, got: " ++ @typeName(T)),
             }
 
-            _ = try vm.run(self.byte_code, writer);
+            _ = vm.run(self.byte_code, writer) catch |runtime_err| {
+                if (opts.error_report) |er| {
+                    if (vm.err) |vm_err| {
+                        er.* = .{
+                            ._allocator = allocator,
+                            .message = try allocator.dupe(u8, vm_err),
+                        };
+                    }
+                }
+                return runtime_err;
+            };
         }
 
         pub fn disassemble(self: *const Self, writer: anytype) !void {
-            return ztl.disassemble(App, self.arena.child_allocator, self.byte_code, writer);
+            return @import("byte_code.zig").disassemble(App, self.arena.child_allocator, self.byte_code, writer);
         }
 
         // allocator is an arena
@@ -178,6 +179,7 @@ pub fn Template(comptime App: type) type {
             }
 
             var buf = std.ArrayList(u8).init(allocator);
+
             // we'll need at least this much space
             try buf.ensureTotalCapacity(src.len + 64);
 
@@ -266,10 +268,7 @@ pub fn Template(comptime App: type) type {
                     return .{pos + token.position.pos, 3, true};
                 },
                 .EOF => {
-                    self.err = .{
-                        .position = .{},
-                        .desc = "Missing expected end tag, '%>'",
-                    };
+                    self.err = "Missing expected end tag, '%>'";
                     return error.ScanError;
                 },
                 else => {},
@@ -302,15 +301,29 @@ pub fn Template(comptime App: type) type {
         fn scanNext(self: *Self, scanner: *Scanner) !Token {
             return scanner.next() catch |err| {
                 if (scanner.err) |se| {
-                    self.err = .{.position = .{}, .desc = try self.arena.allocator().dupe(u8, se)};
-                } else {
-                    self.err = .{.position = .{}, .desc = @errorName(err)};
+                    self.err = try self.arena.allocator().dupe(u8, se);
                 }
                 return err;
             };
         }
     };
 }
+
+pub const RenderOpts = struct {
+    allocator: ?Allocator = null,
+    error_report: ?*ErrorReport = null,
+};
+
+pub const ErrorReport = struct {
+    _allocator: ?Allocator = null,
+    message: []const u8 = "",
+
+    pub fn deinit(self: ErrorReport) void {
+        if (self._allocator) |a| {
+            a.free(self.message);
+        }
+    }
+};
 
 pub const Global = struct {
     []const u8,
@@ -431,6 +444,15 @@ test "Template: errors in template" {
     try testTemplateError("Missing expected end tag, '%>'", "<%=");
 }
 
+test "Template: runtime error" {
+    try testTemplateRuntimeError("Unknown method 'pop' for an integer",
+        \\ <%
+        \\      var value = 1;
+        \\      value.pop();
+        \\ %>
+    );
+}
+
 test "Template: map global" {
     const globals = try t.allocator.alloc(Global, 2);
     defer t.allocator.free(globals);
@@ -448,7 +470,7 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
             std.debug.print("==zt source:==\n{s}\n", .{zts.src});
         } else |_| {}
 
-        std.debug.print("Compile template error:\n{s}\n", .{tmpl.err.?.desc});
+        std.debug.print("Compile template error:\n{s}\n", .{tmpl.err.?});
         return err;
     };
     // try tmpl.disassemble(std.io.getStdErr().writer());
@@ -461,7 +483,7 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
 
     var buf = std.ArrayList(u8).init(t.allocator);
     defer buf.deinit();
-    tmpl.render(t.allocator, buf.writer(), args) catch |err| {
+    tmpl.render(buf.writer(), args, .{}) catch |err| {
         const zts = tmpl.translateToZt(template) catch unreachable;
         defer zts.deinit();
         std.debug.print("==zt source:==\n{s}\n", .{zts.src});
@@ -477,7 +499,24 @@ fn testTemplateError(expected: []const u8, template: []const u8) !void {
     var tmpl = Template(void).init(t.allocator, {});
     defer tmpl.deinit();
     tmpl.compile(template) catch {
-        try t.expectString(expected, tmpl.err.?.desc);
+        try t.expectString(expected, tmpl.err.?);
+        return;
+    };
+    return error.NoError;
+}
+
+fn testTemplateRuntimeError(expected: []const u8, template: []const u8) !void {
+    var tmpl = Template(void).init(t.allocator, {});
+    defer tmpl.deinit();
+    try tmpl.compile(template);
+
+    var buf = std.ArrayList(u8).init(t.allocator);
+    defer buf.deinit();
+
+    var report = ErrorReport{};
+    tmpl.render(buf.writer(), .{}, .{.error_report = &report}) catch {
+        defer report.deinit();
+        try t.expectString(expected, report.message);
         return;
     };
     return error.NoError;
