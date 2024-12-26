@@ -355,7 +355,6 @@ pub const Scanner = struct {
                 asUint("else") => return self.createSimpleToken("ELSE", value),
                 asUint("null") => return self.createSimpleToken("NULL", value),
                 asUint("true") => return self.createToken(.{ .BOOLEAN = true }, value),
-                asUint("void") => return self.createSimpleToken("VOID", value),
                 else => {},
             },
             5 => switch (@as(u40, @bitCast(value[0..5].*))) {
@@ -481,7 +480,6 @@ pub const Token = struct {
         START,
         STRING: String,
         VAR,
-        VOID,
         WHILE,
     };
 
@@ -543,7 +541,6 @@ pub const Token = struct {
         START,
         STRING,
         VAR,
-        VOID,
         WHILE,
     };
 };
@@ -677,7 +674,7 @@ test "scanner: identifier" {
 }
 
 test "scanner: keyword" {
-    try expectTokens("and else false fn if null or return true var void while", &.{
+    try expectTokens("and else false fn if null or return true var while", &.{
         .{ .AND = {} },
         .{ .ELSE = {} },
         .{ .BOOLEAN = false },
@@ -688,7 +685,6 @@ test "scanner: keyword" {
         .{ .RETURN = {} },
         .{ .BOOLEAN = true },
         .{ .VAR = {} },
-        .{ .VOID = {} },
         .{ .WHILE = {} },
     });
 }
