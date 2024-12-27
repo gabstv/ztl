@@ -9,6 +9,9 @@ const Token = @import("scanner.zig").Token;
 const Scanner = @import("scanner.zig").Scanner;
 const Compiler = @import("compiler.zig").Compiler;
 
+const RenderErrorReport = ztl.RenderErrorReport;
+const CompileErrorReport = ztl.CompileErrorReport;
+
 const Allocator = std.mem.Allocator;
 const MemoryPool = std.heap.MemoryPool;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -19,7 +22,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 pub fn Template(comptime App: type) type {
     return struct {
         app: App,
-        err: ?[]const u8,
         allocator: Allocator,
         arena: ArenaAllocator,
         globals: [][]const u8,
@@ -30,7 +32,6 @@ pub fn Template(comptime App: type) type {
         pub fn init(allocator: Allocator, app: App) Self {
             return .{
                 .app = app,
-                .err = null,
                 .globals = &.{},
                 .byte_code = "",
                 .allocator = allocator,
@@ -42,13 +43,13 @@ pub fn Template(comptime App: type) type {
             self.arena.deinit();
         }
 
-        pub fn compile(self: *Self, src: []const u8) !void {
+        pub fn compile(self: *Self, src: []const u8, opts: CompilerOpts) !void {
             var build_arena = ArenaAllocator.init(self.allocator);
             defer build_arena.deinit();
 
             const build_allocator = build_arena.allocator();
 
-            const zt_src = try self._translateToZt(build_allocator, src);
+            const zt_src = try _translateToZt(build_allocator, src, opts.error_report);
 
             const template_arena = self.arena.allocator();
 
@@ -59,7 +60,7 @@ pub fn Template(comptime App: type) type {
                 // We need to extract any globals from the ztl source code, and then
                 // manipulate the bytecode to have it think those locals are valid
                 // (which, when we run the bytecode, the VM will inject)
-                const temp_globals = try self.extractGlobals(build_allocator, zt_src);
+                const temp_globals = try extractGlobals(build_allocator, zt_src);
 
                 // copy our globals arraylist (which was generated in our
                 // tempoary build_arena and might be wasting space, and references
@@ -94,19 +95,22 @@ pub fn Template(comptime App: type) type {
             // stack).
 
             var compiler = try Compiler(App).init(build_allocator);
-            compiler.compile(zt_src, .{ .force_locals = self.globals }) catch |err| {
-                if (compiler.err) |ce| {
-                    self.err = try template_arena.dupe(u8, ce.desc);
+            compiler.compile(zt_src, .{
+                .force_locals = self.globals,
+                .error_report = opts.error_report,
+            }) catch |err| {
+                if (opts.error_report) |er| {
+                    er.src = try template_arena.dupe(u8, zt_src);
+                    er.message = try template_arena.dupe(u8, er.message);
                 }
                 return err;
             };
-
-            self.byte_code = try compiler.byteCode(template_arena);
+            self.byte_code = try compiler.writer.toBytes(template_arena);
         }
 
-        pub fn translateToZt(self: *Self, src: []const u8) !ZtSource {
+        pub fn translateToZt(self: *Self, src: []const u8, error_report: ?*CompileErrorReport) !ZtSource {
             var arena = ArenaAllocator.init(self.allocator);
-            const zt_src = try self._translateToZt(arena.allocator(), src);
+            const zt_src = try _translateToZt(arena.allocator(), src, error_report);
 
             return .{
                 .src = zt_src,
@@ -159,7 +163,7 @@ pub fn Template(comptime App: type) type {
                 if (opts.error_report) |er| {
                     if (vm.err) |vm_err| {
                         er.* = .{
-                            ._allocator = allocator,
+                            .allocator = allocator,
                             .message = try allocator.dupe(u8, vm_err),
                         };
                     }
@@ -171,159 +175,152 @@ pub fn Template(comptime App: type) type {
         pub fn disassemble(self: *const Self, writer: anytype) !void {
             return @import("byte_code.zig").disassemble(App, self.arena.child_allocator, self.byte_code, writer);
         }
-
-        // allocator is an arena
-        fn _translateToZt(self: *Self, allocator: Allocator, src: []const u8) ![]const u8 {
-            if (src.len == 0) {
-                return "return null;";
-            }
-
-            var buf = std.ArrayList(u8).init(allocator);
-
-            // we'll need at least this much space
-            try buf.ensureTotalCapacity(src.len + 64);
-
-            var start: usize = 0;
-            const end = src.len - 1;
-            var scanner = Scanner.init(allocator, "");
-
-            // If the first character is '%', it isn't a tag. Doing this check here
-            // means we don't have to check if `i == 0` inside our loop.
-            var pos: usize = if (src[0] == '%') 1 else 0;
-
-            var trim_left = false;
-
-            while (true) {
-                const idx = std.mem.indexOfScalarPos(u8, src, pos, '%') orelse end;
-                if (idx == end) {
-                    try appendOut(&buf, src[start..], trim_left);
-                    break;
-                }
-
-                if (src[idx - 1] != '<') {
-                    pos = idx + 1;
-                    continue;
-                }
-
-                var next = src[idx + 1];
-                if (next == '%') {
-                    // <%%  => '<%'
-                    try appendOut(&buf, src[start..idx], false);
-                    pos = idx + 1;
-                    start = pos;
-                    continue;
-                }
-
-                // A literal. We can't append this to buf just yet, since the
-                // following template tag might ask us to strip white spaces.
-                var literal = src[start .. idx - 1];
-                // skip the %
-                pos = idx + 1;
-
-                if (next == '-' and pos != end) {
-                    pos += 1;
-                    next = src[pos];
-                    literal = std.mem.trimRight(u8, literal, &std.ascii.whitespace);
-                }
-
-                try appendOut(&buf, literal, trim_left);
-
-                // find the position of the closing tag, %>
-                const code_end, const end_tag_len, trim_left = try self.findCodeEnd(&scanner, src, pos);
-
-                if (next == '=') {
-                    pos += 1; // skip the =
-                    const ELZ_SET_EXP = "\n$";
-                    const expression = std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace);
-                    if (expression.len > 0) {
-                        try buf.ensureUnusedCapacity(ELZ_SET_EXP.len + expression.len + 2);
-                        buf.appendSliceAssumeCapacity(ELZ_SET_EXP);
-                        buf.appendSliceAssumeCapacity(expression);
-                        if (expression[expression.len - 1] != ';') {
-                            buf.appendSliceAssumeCapacity(";");
-                        }
-                    }
-                } else {
-                    try buf.append('\n');
-                    try buf.appendSlice(std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace));
-                }
-
-                pos = code_end + end_tag_len; // skip the closing %> or -%>
-                start = pos;
-            }
-            try buf.appendSlice("\nreturn null;");
-            return buf.items;
-        }
-
-        fn findCodeEnd(self: *Self, scanner: *Scanner, src: []const u8, pos: usize) !struct { usize, usize, bool } {
-            scanner.reset(src[pos..]);
-            while (self.scanNext(scanner)) |token| switch (token.value) {
-                .PERCENT => {
-                    switch ((try self.scanNext(scanner)).value) {
-                        .GREATER,
-                        => return .{ pos + token.position.pos, 2, false },
-                        else => {},
-                    }
-                },
-                .MINUS => if (scanner.peek(&.{ .PERCENT, .GREATER })) {
-                    return .{ pos + token.position.pos, 3, true };
-                },
-                .EOF => {
-                    self.err = "Missing expected end tag, '%>'";
-                    return error.ScanError;
-                },
-                else => {},
-            } else |err| {
-                return err;
-            }
-            unreachable;
-        }
-
-        // allocator is an arena
-        fn extractGlobals(self: *Self, allocator: Allocator, src: []const u8) !std.StringHashMapUnmanaged(void) {
-            var scanner = Scanner.init(allocator, src);
-            // a map because we need to de-dupe
-            var globals: std.StringHashMapUnmanaged(void) = .{};
-
-            while (self.scanNext(&scanner)) |token| switch (token.value) {
-                .IDENTIFIER => |name| {
-                    if (name[0] == '@') {
-                        _ = try globals.getOrPut(allocator, name);
-                    }
-                },
-                .EOF => return globals,
-                else => {},
-            } else |err| {
-                return err;
-            }
-            unreachable;
-        }
-
-        fn scanNext(self: *Self, scanner: *Scanner) !Token {
-            return scanner.next() catch |err| {
-                if (scanner.err) |se| {
-                    self.err = try self.arena.allocator().dupe(u8, se);
-                }
-                return err;
-            };
-        }
     };
 }
 
-pub const RenderOpts = struct {
-    allocator: ?Allocator = null,
-    error_report: ?*ErrorReport = null,
+// allocator is an arena
+fn _translateToZt(allocator: Allocator, src: []const u8, error_report: ?*CompileErrorReport) ![]const u8 {
+    if (src.len == 0) {
+        return "return null;";
+    }
+
+    var buf = std.ArrayList(u8).init(allocator);
+    try buf.ensureTotalCapacity(src.len + 64);
+
+    const end = src.len - 1;
+
+    var start: usize = 0;
+
+    // If the first character is '%', it isn't a tag. Doing this check here
+    // means we don't have to check if `i == 0` inside our loop.
+    var pos: usize = if (src[0] == '%') 1 else 0;
+
+    var scanner = Scanner.init(allocator, "");
+
+    errdefer |err| if (error_report) |er| {
+        var message = @errorName(err);
+        if (err == error.EOF) {
+            message = "Missing expected end tag, '%>'";
+        }
+        er.* = .{
+            .src = src,
+            .err = err,
+            .end = @intCast(scanner.pos + pos),
+            .start = @intCast(scanner.pos + pos),
+            .message = message,
+        };
+    };
+
+    var trim_left = false;
+    while (true) {
+        const idx = std.mem.indexOfScalarPos(u8, src, pos, '%') orelse end;
+        if (idx == end) {
+            try appendOut(&buf, src[start..], trim_left);
+            break;
+        }
+
+        if (src[idx - 1] != '<') {
+            pos = idx + 1;
+            continue;
+        }
+
+        var next = src[idx + 1];
+        if (next == '%') {
+            // <%%  => '<%'
+            try appendOut(&buf, src[start..idx], false);
+            pos = idx + 1;
+            start = pos;
+            continue;
+        }
+
+        // A literal. We can't append this to buf just yet, since the
+        // following template tag might ask us to strip white spaces.
+        var literal = src[start .. idx - 1];
+        // skip the %
+        pos = idx + 1;
+
+        if (next == '-' and pos != end) {
+            pos += 1;
+            next = src[pos];
+            literal = std.mem.trimRight(u8, literal, &std.ascii.whitespace);
+        }
+
+        try appendOut(&buf, literal, trim_left);
+
+        // find the position of the closing tag, %>
+        const code_end, const tag_end, trim_left = try findCodeEnd(&scanner, src, pos);
+        if (next == '=') {
+            pos += 1; // skip the =
+            const ELZ_SET_EXP = "\n$";
+            const expression = std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace);
+
+            if (expression.len > 0) {
+                try buf.ensureUnusedCapacity(ELZ_SET_EXP.len + expression.len + 2);
+                buf.appendSliceAssumeCapacity(ELZ_SET_EXP);
+                buf.appendSliceAssumeCapacity(expression);
+                if (expression[expression.len - 1] != ';') {
+                    buf.appendSliceAssumeCapacity(";");
+                }
+            }
+        } else {
+            try buf.append('\n');
+            try buf.appendSlice(std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace));
+        }
+
+        pos = tag_end; // skip the closing %> or -%>
+        start = pos;
+    }
+    try buf.appendSlice("\nreturn null;");
+    return buf.items;
+}
+
+fn findCodeEnd(scanner: *Scanner, src: []const u8, pos: usize) !struct { usize, usize, bool } {
+    scanner.reset(src[pos..]);
+    while (scanner.next()) |token| switch (token) {
+        .PERCENT => {
+            switch ((try scanner.next())) {
+                .GREATER => return .{ pos + scanner.pos - 2, pos + scanner.pos, false },
+                else => {},
+            }
+        },
+        .MINUS => if (scanner.peek(&.{ .PERCENT, .GREATER })) {
+            return .{ pos + scanner.pos - 1, pos + scanner.pos + 2, true };
+        },
+        .EOF => return error.EOF,
+        else => {},
+    } else |err| {
+        return err;
+    }
+    unreachable;
+}
+
+// allocator is an arena
+fn extractGlobals(allocator: Allocator, src: []const u8) !std.StringHashMapUnmanaged(void) {
+    var scanner = Scanner.init(allocator, src);
+    // a map because we need to de-dupe
+    var globals: std.StringHashMapUnmanaged(void) = .{};
+
+    while (scanner.next()) |token| switch (token) {
+        .IDENTIFIER => |name| {
+            if (name[0] == '@') {
+                _ = try globals.getOrPut(allocator, name);
+            }
+        },
+        .EOF => return globals,
+        else => {},
+    } else |err| {
+        return err;
+    }
+    unreachable;
+}
+
+pub const CompilerOpts = struct {
+    error_report: ?*CompileErrorReport = null,
 };
 
-pub const ErrorReport = struct {
-    _allocator: ?Allocator = null,
-    message: []const u8 = "",
-
-    pub fn deinit(self: ErrorReport) void {
-        if (self._allocator) |a| {
-            a.free(self.message);
-        }
-    }
+pub const RenderOpts = struct {
+    allocator: ?Allocator = null,
+    error_report: ?*RenderErrorReport = null,
 };
 
 pub const Global = struct {
@@ -442,12 +439,48 @@ test "Template: for loop" {
     , .{ .products = [_]i64{ 10, 22, 33 } });
 }
 
-test "Template: errors in template" {
+test "Template: template error" {
     try testTemplateError("Missing expected end tag, '%>'", "<%=");
+
+    try testTemplateFullError(
+        \\UnexpectedCharacter - line 1:
+        \\<%= \ %>
+        \\----^
+    , "<%= \\ %>");
+
+    try testTemplateFullError(
+        \\UnexpectedCharacter - line 3:
+        \\ <h2>Products</h2>
+        \\ <% foreach (@products) |p| { %>
+        \\    name: <%= p["name"] \ %>
+        \\------------------------^
+        \\ <% } %>
+    ,
+        \\ <h2>Products</h2>
+        \\ <% foreach (@products) |p| { %>
+        \\    name: <%= p["name"] \ %>
+        \\ <% } %>
+    );
+
+    // TODO:
+    // // above is a scanner error, this is a compiler erro
+    // try testTemplateFullError(
+    //     \\UnexpectedCharacter - line 3:
+    //     \\ <h2>Products</h2>
+    //     \\ <% foreach (@products) |p| { %>
+    //     \\    name: <%= p["name"} %>
+    //     \\----------------------^
+    //     \\ <% } %>
+    // ,
+    //     \\ <h2>Products</h2>
+    //     \\ <% foreach (@products) |p| { %>
+    //     \\    name: <%= p["name"} %>
+    //     \\ <% } %>
+    // );
 }
 
 test "Template: runtime error" {
-    try testTemplateRuntimeError("Unknown method 'pop' for an integer",
+    try testTemplateRenderError("Unknown method 'pop' for an integer",
         \\ <%
         \\      var value = 1;
         \\      value.pop();
@@ -466,13 +499,15 @@ test "Template: map global" {
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
     var tmpl = Template(void).init(t.allocator, {});
     defer tmpl.deinit();
-    tmpl.compile(template) catch |err| {
-        if (tmpl.translateToZt(template)) |zts| {
+
+    var error_report = CompileErrorReport{};
+    tmpl.compile(template, .{.error_report = &error_report}) catch |err| {
+        if (tmpl.translateToZt(template, null)) |zts| {
             defer zts.deinit();
             std.debug.print("==zt source:==\n{s}\n", .{zts.src});
         } else |_| {}
 
-        std.debug.print("Compile template error:\n{s}\n", .{tmpl.err.?});
+        std.debug.print("Compile template error:\n{}\n", .{error_report});
         return err;
     };
     // try tmpl.disassemble(std.io.getStdErr().writer());
@@ -486,7 +521,7 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
     var buf = std.ArrayList(u8).init(t.allocator);
     defer buf.deinit();
     tmpl.render(buf.writer(), args, .{}) catch |err| {
-        const zts = tmpl.translateToZt(template) catch unreachable;
+        const zts = tmpl.translateToZt(template, null) catch unreachable;
         defer zts.deinit();
         std.debug.print("==zt source:==\n{s}\n", .{zts.src});
 
@@ -500,22 +535,43 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
 fn testTemplateError(expected: []const u8, template: []const u8) !void {
     var tmpl = Template(void).init(t.allocator, {});
     defer tmpl.deinit();
-    tmpl.compile(template) catch {
-        try t.expectString(expected, tmpl.err.?);
+
+    var error_report = CompileErrorReport{};
+    tmpl.compile(template, .{.error_report = &error_report}) catch {
+        try t.expectString(expected, error_report.message);
         return;
     };
     return error.NoError;
 }
 
-fn testTemplateRuntimeError(expected: []const u8, template: []const u8) !void {
+
+fn testTemplateFullError(expected: []const u8, template: []const u8) !void {
     var tmpl = Template(void).init(t.allocator, {});
     defer tmpl.deinit();
-    try tmpl.compile(template);
+
+    var error_report = CompileErrorReport{};
+    tmpl.compile(template, .{.error_report = &error_report}) catch {
+        var buf: std.ArrayListUnmanaged(u8) = .{};
+        defer buf.deinit(t.allocator);
+
+        std.debug.print("A\n", .{});
+        std.debug.print("{any}\n", .{error_report});
+        try std.fmt.format(buf.writer(t.allocator), "{}", .{error_report});
+        try t.expectString(expected, buf.items);
+        return;
+    };
+    return error.NoError;
+}
+
+fn testTemplateRenderError(expected: []const u8, template: []const u8) !void {
+    var tmpl = Template(void).init(t.allocator, {});
+    defer tmpl.deinit();
+    try tmpl.compile(template, .{});
 
     var buf = std.ArrayList(u8).init(t.allocator);
     defer buf.deinit();
 
-    var report = ErrorReport{};
+var report = RenderErrorReport{};
     tmpl.render(buf.writer(), .{}, .{ .error_report = &report }) catch {
         defer report.deinit();
         try t.expectString(expected, report.message);

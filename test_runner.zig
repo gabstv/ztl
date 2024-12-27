@@ -38,6 +38,8 @@ pub fn main() !void {
     const printer = Printer.init();
     printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
+    var after_each = std.ArrayListUnmanaged(std.builtin.TestFn){};
+
     for (builtin.test_functions) |t| {
         if (isSetup(t)) {
             current_test = friendlyName(t.name);
@@ -46,10 +48,13 @@ pub fn main() !void {
                 return err;
             };
         }
+        if (isAfterEach(t)) {
+            try after_each.append(allocator, t);
+        }
     }
 
     for (builtin.test_functions) |t| {
-        if (isSetup(t) or isTeardown(t)) {
+        if (isSetup(t) or isTeardown(t) or isAfterEach(t)) {
             continue;
         }
 
@@ -67,6 +72,11 @@ pub fn main() !void {
         current_test = friendly_name;
         std.testing.allocator_instance = .{};
         const result = t.func();
+
+        for (after_each.items) |ae| {
+            try ae.func();
+        }
+
         current_test = null;
 
         if (is_unnamed_test) {
@@ -311,4 +321,8 @@ fn isSetup(t: std.builtin.TestFn) bool {
 
 fn isTeardown(t: std.builtin.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterAll");
+}
+
+fn isAfterEach(t: std.builtin.TestFn) bool {
+    return std.mem.endsWith(u8, t.name, "tests:afterEach");
 }

@@ -2,33 +2,12 @@ const std = @import("std");
 
 pub const VM = @import("vm.zig").VM;
 pub const Value = @import("value.zig").Value;
-pub const DebugMode = @import("config.zig").DebugMode;
 pub const Global = @import("template.zig").Global;
 pub const Template = @import("template.zig").Template;
-pub const ErrorReport = @import("template.zig").ErrorReport;
+pub const DebugMode = @import("config.zig").DebugMode;
 
-pub const Error = struct {
-    desc: []const u8,
-    position: ?Position = null,
-
-    pub fn format(self: Error, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("{s}", .{self.desc});
-    }
-};
-
-pub const Position = struct {
-    // the byte in src this token starts at
-    pos: u32 = 0,
-
-    // the line this token is on (1-based)
-    line: u32 = 0,
-
-    // the byte in src of the line this token is on, the actual token position on
-    // the line is at pos - line_start
-    line_start: u32 = 0,
-
-    pub const ZERO: Position = .{};
-};
+pub const RenderErrorReport = @import("error_report.zig").Render;
+pub const CompileErrorReport = @import("error_report.zig").Compile;
 
 pub fn Functions(comptime A: type) type {
     const App = switch (@typeInfo(A)) {
@@ -74,22 +53,26 @@ test {
 const Compiler = @import("compiler.zig").Compiler;
 const disassemble = @import("byte_code.zig").disassemble;
 
+test "tests:afterEach" {
+    t.reset();
+}
+
 test "ztl: local limit" {
     blk: {
         var c = Compiler(struct {
             pub const ZtlConfig = struct {
                 pub const max_locals = 3;
             };
-        }).init(t.allocator) catch unreachable;
-        defer c.deinit();
+        }).init(t.arena.allocator()) catch unreachable;
 
+        var error_report = CompileErrorReport{};
         c.compile(
             \\ var a = 1;
             \\ var b = 1;
             \\ var c = 1;
             \\ var d = 1;
-        , .{}) catch {
-            try t.expectString("Maximum number of local variable (3) exceeded", c.err.?.desc);
+        , .{.error_report = &error_report}) catch {
+            try t.expectString("Maximum number of local variable (3) exceeded", error_report.message);
             break :blk;
         };
         return error.NoError;
@@ -100,8 +83,8 @@ test "ztl: local limit" {
             pub const ZtlConfig = struct {
                 pub const max_locals = 3;
             };
-        }).init(t.allocator) catch unreachable;
-        defer c.deinit();
+        }).init(t.arena.allocator()) catch unreachable;
+
         try c.compile(
             \\ var a = 1;
             \\ var b = 1;
@@ -345,12 +328,10 @@ test "ztl: increment/decrement" {
         try testReturnValue(.{ .i64 = signed }, src_neg);
     }
 
-    try testError("Expected semicolon (';'), got '++' (PLUS_PLUS)", "return 100++;");
+    try testError("Expected semicolon (';'), got ++ (PLUS_PLUS)", "return 100++;");
 }
 
 test "ztl: variables" {
-    defer t.reset();
-
     try testReturnValue(.{ .string = "Leto" },
         \\ var name = `Leto`;
         \\ return name;
@@ -390,23 +371,23 @@ test "ztl: variables" {
 
     try testError("Variable 'name' used before being initialized", "var name = name + 3;");
     try testError("Variable 'unknown' is unknown", "return unknown;");
-    try testError("Expected assignment operator ('='), got '`hello`' (STRING)", "var x `hello`");
+    try testError("Expected assignment operator ('='), got string 'hello'", "var x `hello`");
 
     try testError("Variable 'c' already declare",
         \\ var c = 3;
         \\ var c = 3;
     );
 
-    try testError("Identifier \"" ++ "a" ** 128 ++ "\" exceeds the character limit of 127", "var " ++ "a" ** 128 ++ " = null;");
+    try testError("IdentifierTooLong", "var " ++ "a" ** 128 ++ " = null;");
 }
 
 test "ztl: if" {
-    // try testReturnValue(.{ .i64 = 1234 },
-    //     \\ if (true) {
-    //     \\   return 1234;
-    //     \\ }
-    //     \\ return 4321;
-    // );
+    try testReturnValue(.{ .i64 = 1234 },
+        \\ if (true) {
+        \\   return 1234;
+        \\ }
+        \\ return 4321;
+    );
 
     try testReturnValue(.{ .i64 = 4321 },
         \\ if (false) {
@@ -563,8 +544,6 @@ test "ztl: variable scopes" {
 }
 
 test "ztl: list initialization" {
-    defer t.reset();
-
     {
         try testReturnValue(t.createListRef(&.{}), "return [];");
     }
@@ -608,8 +587,6 @@ test "ztl: list indexing" {
 }
 
 test "ztl: list assignment" {
-    defer t.reset();
-
     try testReturnValue(.{ .i64 = 10 },
         \\ var arr = [0];
         \\ arr[0] = 10;
@@ -698,8 +675,6 @@ test "ztl: list assignment" {
 }
 
 test "ztl: map initialization" {
-    defer t.reset();
-
     {
         try testReturnValue(t.createMapRef(&.{}, &.{}), "return %{};");
     }
@@ -744,8 +719,6 @@ test "ztl: map indexing" {
 }
 
 test "ztl: map assignment" {
-    defer t.reset();
-
     try testReturnValue(.{ .i64 = 10 },
         \\ var map = %{0: 2};
         \\ map[0] = 10;
@@ -805,8 +778,6 @@ test "ztl: map assignment" {
 }
 
 test "ztl: string indexing" {
-    defer t.reset();
-
     try testReturnValue(.{ .string = "a" }, "return `abc`[0];");
     try testReturnValue(.{ .string = "b" }, "return `abc`[1];");
     try testReturnValue(.{ .string = "c" }, "return `abc`[2];");
@@ -835,8 +806,6 @@ test "ztl: invalid type indexing" {
 }
 
 test "ztl: orelse" {
-    defer t.reset();
-
     try testReturnValue(.{ .i64 = 4 }, "return 4 orelse 1;");
     try testReturnValue(.{ .i64 = 2 }, "return null orelse 2;");
     try testReturnValue(.{ .i64 = 3 }, "return null orelse 2+1;");
@@ -845,8 +814,6 @@ test "ztl: orelse" {
 }
 
 test "ztl: string dedupe" {
-    defer t.reset();
-
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const deduplicate_string_literals = true;
@@ -1372,7 +1339,7 @@ test "ztl: ztl functions" {
         \\ }
     );
 
-    try testError("Identifier \"" ++ "x" ** 128 ++ "\" exceeds the character limit of 127", "fn " ++ "x" ** 128 ++ "(){}");
+    try testError("IdentifierTooLong", "fn " ++ "x" ** 128 ++ "(){}");
 
     try testError("Unreachable code detected",
         \\ fn a() {
@@ -1519,7 +1486,6 @@ test "ztl: method append" {
     );
 
     {
-        defer t.reset();
         var arr1 = [_]Value{
             .{ .i64 = 99 },
         };
@@ -1536,7 +1502,7 @@ test "ztl: method append" {
 }
 
 test "ztl: method contains" {
-    try testError("Function 'contains' expects 1 parameter, but called with 0", "return [].contains()");
+    try testError("Function 'contains' expects 1 parameter, but called with 0", "return [].contains();");
     try testRuntimeError("Map key must be an integer or string, got a boolean", "return %{}.contains(true);");
 
     try testReturnValue(.{ .bool = false }, "return [].contains(true);");
@@ -1570,23 +1536,22 @@ test "ztl: method indexOf" {
 }
 
 test "ztl: method sort" {
-    // try testError("Function 'sort' expects 0 parameters, but called with 2", "return [].sort(true, false)");
-    // try testRuntimeError("Unknown method 'sort' for a boolean", "return true.sort();");
+    try testError("Function 'sort' expects 0 parameters, but called with 2", "return [].sort(true, false)");
+    try testRuntimeError("Unknown method 'sort' for a boolean", "return true.sort();");
 
-    // try testReturnValue(.{ .i64 = 5431 },
-    //     \\ var arr = [4, 1, 3, 5];
-    //     \\ arr.sort();
-    //     \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
-    // );
+    try testReturnValue(.{ .i64 = 5431 },
+        \\ var arr = [4, 1, 3, 5];
+        \\ arr.sort();
+        \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
+    );
 
-    // try testReturnValue(.{ .f64 = 5431.2 },
-    //     \\ var arr = [4, 1, 3.02, 5];
-    //     \\ arr.sort();
-    //     \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
-    // );
+    try testReturnValue(.{ .f64 = 5431.2 },
+        \\ var arr = [4, 1, 3.02, 5];
+        \\ arr.sort();
+        \\ return arr[0] + (10 * arr[1]) + (100 * arr[2]) + (1000 * arr[3]);
+    );
 
     {
-        defer t.reset();
         var arr = [_]Value{
             .{ .string = "AZ" },
             .{ .string = "a" },
@@ -1597,8 +1562,6 @@ test "ztl: method sort" {
 }
 
 test "ztl: method concat" {
-    defer t.reset();
-
     try testError("Function 'concat' expects 1 parameter, but called with 2", "return [].concat(true, false)");
 
     {
@@ -1715,21 +1678,21 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
 }
 
 fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, src: []const u8) !void {
-    var c = try Compiler(App).init(t.allocator);
-    defer c.deinit();
+    const allocator = t.arena.allocator();
 
-    c.compile(src, .{}) catch |err| {
-        std.debug.print("Compilation error: {}\n", .{c.err.?});
-        return err;
+    const byte_code = blk: {
+        var error_report = CompileErrorReport{};
+        var c = try Compiler(App).init(allocator);
+        c.compile(src, .{.error_report = &error_report}) catch |err| {
+            std.debug.print("Compilation error: {any}\n{}\n", .{err, error_report});
+            return err;
+        };
+        break :blk try c.writer.toBytes(allocator);
     };
 
-    const byte_code = try c.byteCode(t.allocator);
-    defer t.allocator.free(byte_code);
-    // disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
+    // disassemble(App, allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
-    var arena = std.heap.ArenaAllocator.init(t.allocator);
-    defer arena.deinit();
-    var vm = VM(App).init(arena.allocator(), app);
+    var vm = VM(App).init(allocator, app);
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const value = vm.run(byte_code, buf.writer(t.allocator)) catch |err| {
@@ -1737,7 +1700,7 @@ fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, src: []
         if (vm.err) |e| {
             std.debug.print("{any} {s}\n", .{ err, e });
         }
-        disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
+        disassemble(App, allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
         return err;
     };
 
@@ -1755,13 +1718,12 @@ fn testError(expected: []const u8, src: []const u8) !void {
 }
 
 fn testErrorWithApp(comptime App: type, expected: []const u8, src: []const u8) !void {
-    var c = Compiler(App).init(t.allocator) catch unreachable;
-    defer c.deinit();
+    var error_report = CompileErrorReport{};
+    var c = Compiler(App).init(t.arena.allocator()) catch unreachable;
 
-    c.compile(src, .{}) catch {
-        const ce = c.err orelse unreachable;
-        if (std.mem.indexOf(u8, ce.desc, expected) == null) {
-            std.debug.print("Wrong error\nexpected: '{s}'\nactual:   '{s}'\n", .{ expected, ce.desc });
+    c.compile(src, .{.error_report = &error_report}) catch {
+        if (std.mem.indexOf(u8, error_report.message, expected) == null) {
+            std.debug.print("Wrong error\nexpected: '{s}'\nactual:   '{s}'\n", .{ expected, error_report.message });
             return error.WrongError;
         }
         return;
@@ -1771,15 +1733,14 @@ fn testErrorWithApp(comptime App: type, expected: []const u8, src: []const u8) !
 }
 
 fn testRuntimeError(expected: []const u8, src: []const u8) !void {
-    var c = try Compiler(void).init(t.allocator);
-    defer c.deinit();
-
-    c.compile(src, .{}) catch |err| {
-        std.debug.print("Compilation error: {}\n", .{c.err.?});
+    var error_report = CompileErrorReport{};
+    var c = try Compiler(void).init(t.arena.allocator());
+    c.compile(src, .{.error_report = &error_report}) catch |err| {
+        std.debug.print("Compilation error: {any}\n{}\n", .{err, error_report});
         return err;
     };
 
-    const byte_code = try c.byteCode(t.allocator);
+    const byte_code = try c.writer.toBytes(t.allocator);
     defer t.allocator.free(byte_code);
     // disassemble({}, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 

@@ -10,7 +10,7 @@ try template.compile(
     \\ <% foreach (@product) |product| { %>
     \\     <%= product["name"] %> 
     \\ <%- } %>
-);
+, .{});
 
 // Write to any writer, here we're using an ArrayList
 var buf = std.ArrayList(u8).init(allocator);
@@ -128,27 +128,26 @@ There is 1 built-in function:
 Developers can add their own Zig functions.
 
 ## Zig Usage
-If `compile` fails, look at `template.err` for a description of the error (yes, the error messages currently suck):
+You can get an error report on failed compile by passing in a `*ztl.CompileErrorReport`:
 
 ```zig
 var template = ztl.Template(void).init(allocator, {});
 defer template.deinit();
 
-template.compile("<% 1.invalid() %>") catch |err| {
-    if (template.err) |te| {
-        std.debug.print("{any} {s}\n", .{err, te});
-    }
+var error_report = ztl.CompileErrorReport{};
+template.compile("<% 1.invalid() %>", .{.error_report = &error_report}) catch |err| {
+    std.debug.print("{}\n", .{error_report});
     return err;
 };
 ```
 
 The `template.render` method is thread-safe. The general intention is that a template is compiled once, and rendered multiple times. The `render` method takes an optional `RenderOption` argument.
 
-The first optional field is `error_report`. When set, a description of the runtime error (yes, the error messages currently suck):
+The first optional field is `*ztl.RenderErorrReport`. When set, a description of the runtime error (yes, the error messages currently suck):
 
 ```zig
-var report = ztl.ErrorReport{};
-template.render(buf.writer(), .{}, .{.error_report = &report}) catch |err| {
+var error_report = ztl.RenderErrorReport{};
+template.render(buf.writer(), .{}, .{.error_report = &error_report}) catch |err| {
     defer report.deinit();
     std.debug.print("Runtime error {any} {s}\n", .{err, report.message});
 };
