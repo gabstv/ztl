@@ -204,7 +204,7 @@ pub fn VM(comptime App: type) type {
                         // We could do this more cleanly by having the compiler
                         // issue a POP for each variable. But this is faster.
                         for (0..value_count) |_| {
-                            stack.appendAssumeCapacity(.{.null = {}});
+                            stack.appendAssumeCapacity(.{ .null = {} });
                         }
 
                         // Above, we store the iterator in the stack where the value
@@ -226,12 +226,12 @@ pub fn VM(comptime App: type) type {
                         const iterator_start = items.len - value_count;
                         ITERATE: for (items[iterator_start..len]) |it| {
                             const value = (try iterateNext(ref_pool, it.ref)) orelse {
-                                stack.appendAssumeCapacity(.{.bool = false});
+                                stack.appendAssumeCapacity(.{ .bool = false });
                                 break :ITERATE;
                             };
                             stack.appendAssumeCapacity(value);
                         } else {
-                            stack.appendAssumeCapacity(.{.bool = true});
+                            stack.appendAssumeCapacity(.{ .bool = true });
                         }
                     },
                     .JUMP => {
@@ -285,7 +285,7 @@ pub fn VM(comptime App: type) type {
                                 ip += 4;
 
                                 var ref = try ref_pool.create();
-                                ref.* = .{.value = .{.list = .{}}};
+                                ref.* = .{ .value = .{ .list = .{} } };
                                 var list = &ref.value.list;
 
                                 if (value_count == 0) {
@@ -309,11 +309,11 @@ pub fn VM(comptime App: type) type {
                                 ip += 4;
 
                                 var ref = try ref_pool.create();
-                                ref.* = .{.value = .{.map = .{}}};
+                                ref.* = .{ .value = .{ .map = .{} } };
                                 var map = &ref.value.map;
 
                                 if (entry_count == 0) {
-                                    try stack.append(allocator, .{.ref = ref});
+                                    try stack.append(allocator, .{ .ref = ref });
                                 } else {
                                     // * 2 since every entry is made up of a key and a value
                                     std.debug.assert(stack.items.len >= entry_count * 2);
@@ -326,8 +326,8 @@ pub fn VM(comptime App: type) type {
                                     var i = first_index;
                                     while (i < items.len) {
                                         const key: KeyValue = switch (items[i]) {
-                                            .i64 => |v| .{.i64 = v},
-                                            .string => |v| .{.string = v},
+                                            .i64 => |v| .{ .i64 = v },
+                                            .string => |v| .{ .string = v },
                                             else => return error.InvalidKeyType,
                                         };
                                         map.putAssumeCapacity(key, items[i + 1]);
@@ -436,7 +436,7 @@ pub fn VM(comptime App: type) type {
                         frame_count += 1;
 
                         if (frame_count == frames.len) {
-                            try self.setErrorFmt("Maximum call depth ({d}) reached", .{ frames.len });
+                            try self.setErrorFmt("Maximum call depth ({d}) reached", .{frames.len});
                             return error.StackOverflow;
                         }
 
@@ -456,7 +456,7 @@ pub fn VM(comptime App: type) type {
                         const function_id = @as(u16, @bitCast(ip[0..2].*));
                         ip += 2;
 
-                        const result = try app.call(self, @enumFromInt(function_id), stack.items[stack.items.len - arity..]);
+                        const result = try app.call(self, @enumFromInt(function_id), stack.items[stack.items.len - arity ..]);
                         self.releaseCount(stack, arity);
                         try stack.append(allocator, result);
                     },
@@ -474,7 +474,7 @@ pub fn VM(comptime App: type) type {
                                 defer std.debug.unlockStdErr();
                                 const stderr = std.io.getStdErr().writer();
                                 try items[start_index].write(stderr);
-                                for (items[start_index+1..]) |value| {
+                                for (items[start_index + 1 ..]) |value| {
                                     try stderr.writeAll(" ");
                                     try value.write(stderr);
                                 }
@@ -486,7 +486,7 @@ pub fn VM(comptime App: type) type {
                     .RETURN => {
                         const value: Value = blk: {
                             if (stack.items.len == 0) {
-                                break :blk .{.null = {}};
+                                break :blk .{ .null = {} };
                             }
 
                             const v = stack.pop();
@@ -515,7 +515,7 @@ pub fn VM(comptime App: type) type {
             }
         }
 
-        const ArithmeticError = error {
+        const ArithmeticError = error{
             TypeError,
             OutOfMemory,
         };
@@ -615,7 +615,7 @@ pub fn VM(comptime App: type) type {
             return error.TypeError;
         }
 
-        const ComparisonError = error {
+        const ComparisonError = error{
             TypeError,
             OutOfMemory,
         };
@@ -626,7 +626,6 @@ pub fn VM(comptime App: type) type {
             std.debug.assert(right_index >= 1);
 
             const left_index = right_index - 1;
-
 
             const left = values[left_index];
             const right = values[right_index];
@@ -666,7 +665,6 @@ pub fn VM(comptime App: type) type {
             }
             try self.setErrorFmt("Incompatible type comparison: {s} > {s} ({s}, {s})", .{ left, right, left.friendlyName(), right.friendlyName() });
             return error.TypeError;
-
         }
 
         fn lesser(self: *Self, left: Value, right: Value) ComparisonError!bool {
@@ -681,7 +679,7 @@ pub fn VM(comptime App: type) type {
                     .f64 => |r| return @as(f64, @floatFromInt(l)) < r,
                     else => {},
                 },
-               .string => |l| switch (right) {
+                .string => |l| switch (right) {
                     .string => |r| return std.mem.order(u8, l, r) == .lt,
                     else => {},
                 },
@@ -706,11 +704,11 @@ pub fn VM(comptime App: type) type {
             switch (target) {
                 .string => |str| {
                     const actual_index = try self.resolveScalarIndex(str.len, index);
-                    return .{.string = str[actual_index .. actual_index + 1]};
+                    return .{ .string = str[actual_index .. actual_index + 1] };
                 },
                 .ref => |ref| switch (ref.value) {
                     .list => |list| return list.items[try self.resolveScalarIndex(list.items.len, index)],
-                    .map => |map| return map.get(.{.i64 = index}) orelse .{.null = {}},
+                    .map => |map| return map.get(.{ .i64 = index }) orelse .{ .null = {} },
                     else => {},
                 },
                 else => {},
@@ -722,7 +720,7 @@ pub fn VM(comptime App: type) type {
         fn getStringIndex(self: *Self, target: Value, index: []const u8) !Value {
             switch (target) {
                 .ref => |ref| switch (ref.value) {
-                    .map => |map| return map.get(.{.string = index}) orelse .{.null = {}},
+                    .map => |map| return map.get(.{ .string = index }) orelse .{ .null = {} },
                     else => {},
                 },
                 else => {},
@@ -752,7 +750,7 @@ pub fn VM(comptime App: type) type {
                         slot.* = value;
                         return;
                     },
-                    .map => |*map| return self.setMapIndex(allocator, map, .{.i64 = index}, value),
+                    .map => |*map| return self.setMapIndex(allocator, map, .{ .i64 = index }, value),
                     else => {},
                 },
                 else => {},
@@ -764,7 +762,7 @@ pub fn VM(comptime App: type) type {
         fn setStringIndex(self: *Self, allocator: Allocator, target: Value, index: []const u8, value: Value) !void {
             switch (target) {
                 .ref => |ref| switch (ref.value) {
-                    .map => |*map| return self.setMapIndex(allocator, map, .{.string = index}, value),
+                    .map => |*map| return self.setMapIndex(allocator, map, .{ .string = index }, value),
                     else => {},
                 },
                 else => {},
@@ -803,10 +801,10 @@ pub fn VM(comptime App: type) type {
                         return result;
                     },
                     .map => |*map| {
-                        const value = map.getPtr(.{.i64 = index}) orelse {
+                        const value = map.getPtr(.{ .i64 = index }) orelse {
                             try self.setErrorFmt("Map does not contain key '{d}'", .{index});
                             return error.MissingKey;
-                    };
+                        };
                         value.* = try self.add(value.*, incr);
                         return value.*;
                     },
@@ -822,7 +820,7 @@ pub fn VM(comptime App: type) type {
             switch (target) {
                 .ref => |ref| switch (ref.value) {
                     .map => |*map| {
-                        const value = map.getPtr(.{.string = index}) orelse {
+                        const value = map.getPtr(.{ .string = index }) orelse {
                             try self.setErrorFmt("Map does not contain key '{d}'", .{index});
                             return error.MissingKey;
                         };
@@ -883,11 +881,11 @@ pub fn VM(comptime App: type) type {
             switch (target) {
                 .ref => |ref| switch (ref.value) {
                     .list => |*list| switch (method) {
-                        .POP => return list.popOrNull() orelse .{.null = {}},
-                        .LAST => return list.getLastOrNull() orelse .{.null = {}},
+                        .POP => return list.popOrNull() orelse .{ .null = {} },
+                        .LAST => return list.getLastOrNull() orelse .{ .null = {} },
                         .FIRST => {
                             if (list.items.len == 0) {
-                                return .{.null = {}};
+                                return .{ .null = {} };
                             }
                             return list.items[0];
                         },
@@ -898,23 +896,23 @@ pub fn VM(comptime App: type) type {
                             return target;
                         },
                         .REMOVE => {
-                            const index = listIndexOf(list, args[0]) orelse return .{.bool = false};
+                            const index = listIndexOf(list, args[0]) orelse return .{ .bool = false };
                             self.release(list.orderedRemove(index));
-                            return .{.bool = true};
+                            return .{ .bool = true };
                         },
                         .REMOVE_AT => {
                             const value = args[0];
                             if (value != .i64) {
-                                try self.setErrorFmt("list.removeAt index must be an integer, got {s}", .{value.friendlyArticleName() });
+                                try self.setErrorFmt("list.removeAt index must be an integer, got {s}", .{value.friendlyArticleName()});
                                 return error.TypeError;
                             }
                             const index = try self.resolveScalarIndex(list.items.len, value.i64);
                             return list.orderedRemove(@intCast(index));
                         },
-                        .CONTAINS => return .{.bool = listIndexOf(list, args[0]) != null},
+                        .CONTAINS => return .{ .bool = listIndexOf(list, args[0]) != null },
                         .INDEX_OF => {
-                            const index = listIndexOf(list, args[0]) orelse return .{.null = {}};
-                            return .{.i64 = @intCast(index)};
+                            const index = listIndexOf(list, args[0]) orelse return .{ .null = {} };
+                            return .{ .i64 = @intCast(index) };
                         },
                         .SORT => {
                             std.mem.sort(Value, list.items, {}, struct {
@@ -951,11 +949,11 @@ pub fn VM(comptime App: type) type {
                             if (map.fetchSwapRemove(key)) |kv| {
                                 return kv.value;
                             }
-                            return .{.null = {}};
+                            return .{ .null = {} };
                         },
                         .CONTAINS => {
                             const key = try self.valueToMapKey(args[0]);
-                            return .{.bool = map.contains(key)};
+                            return .{ .bool = map.contains(key) };
                         },
                         else => {},
                     },
@@ -972,13 +970,13 @@ pub fn VM(comptime App: type) type {
                 .ref => |ref| switch (ref.value) {
                     .list => |*list| {
                         const new_ref = try ref_pool.create();
-                        new_ref.* = .{.value = .{.list_iterator = .{.index = 0, .list = list, .ref = ref}}};
-                        return .{.ref = new_ref};
+                        new_ref.* = .{ .value = .{ .list_iterator = .{ .index = 0, .list = list, .ref = ref } } };
+                        return .{ .ref = new_ref };
                     },
                     .map => |map| {
                         const new_ref = try ref_pool.create();
-                        new_ref.* = .{.value = .{.map_iterator = .{.inner = map.iterator(), .ref = ref}}};
-                        return .{.ref = new_ref};
+                        new_ref.* = .{ .value = .{ .map_iterator = .{ .inner = map.iterator(), .ref = ref } } };
+                        return .{ .ref = new_ref };
                     },
                     else => {},
                 },
@@ -1002,8 +1000,8 @@ pub fn VM(comptime App: type) type {
                 .map_iterator => |*it| {
                     const entry = it.inner.next() orelse return null;
                     const new_ref = try ref_pool.create();
-                    new_ref.* = .{.value = .{.map_entry = entry}};
-                    return .{.ref = new_ref};
+                    new_ref.* = .{ .value = .{ .map_entry = entry } };
+                    return .{ .ref = new_ref };
                 },
                 else => unreachable,
             }
@@ -1077,7 +1075,7 @@ pub fn VM(comptime App: type) type {
                     if (int.signedness == .signed) {
                         switch (int.bits) {
                             1...64 => return .{ .i64 = zig },
-                            else => {}
+                            else => {},
                         }
                     } else {
                         switch (int.bits) {
@@ -1088,7 +1086,7 @@ pub fn VM(comptime App: type) type {
                     if (zig < std.math.minInt(i64) or zig > std.math.maxInt(i64)) {
                         return error.UnsupportedType;
                     }
-                    return .{.i64 = @intCast(zig)};
+                    return .{ .i64 = @intCast(zig) };
                 },
                 .float => |float| {
                     switch (float.bits) {
@@ -1107,14 +1105,15 @@ pub fn VM(comptime App: type) type {
                         },
                         else => return self.createValue(zig.*),
                     }
-                    .Many, .Slice => {
+                        .Many,
+                    .Slice => {
                         if (ptr.size == .Many and ptr.sentinel == null) {
                             return error.UnsupportedType;
                         }
                         const slice = if (ptr.size == .Many) std.mem.span(zig) else zig;
                         const child = ptr.child;
                         if (child == u8) {
-                            return .{.string = zig};
+                            return .{ .string = zig };
                         }
 
                         var list: Value.List = .{};
@@ -1123,14 +1122,14 @@ pub fn VM(comptime App: type) type {
                             list.appendAssumeCapacity(try self.createValue(v));
                         }
                         const ref = try self.createRef();
-                        ref.* = .{.value = .{.list = list}};
+                        ref.* = .{ .value = .{ .list = list } };
                         return .{ .ref = ref };
                     },
                     else => return error.UnsupportedType,
                 },
                 .array => |arr| {
                     if (arr.child == u8) {
-                        return .{.string = &zig};
+                        return .{ .string = &zig };
                     }
                     return self.createValue(&zig);
                 },
@@ -1151,10 +1150,10 @@ pub fn VM(comptime App: type) type {
                     var map: Value.Map = .{};
                     try map.ensureTotalCapacity(allocator, s.fields.len);
                     inline for (s.fields) |field| {
-                        map.putAssumeCapacity(.{.string = field.name}, try self.createValue(@field(zig, field.name)));
+                        map.putAssumeCapacity(.{ .string = field.name }, try self.createValue(@field(zig, field.name)));
                     }
                     const ref = try self.createRef();
-                    ref.* = .{.value = .{.map = map}};
+                    ref.* = .{ .value = .{ .map = map } };
                     return .{ .ref = ref };
                 },
                 else => return error.UnsupportedType,
@@ -1163,10 +1162,10 @@ pub fn VM(comptime App: type) type {
 
         fn valueToMapKey(self: *Self, value: Value) !KeyValue {
             switch (value) {
-                .i64 => |v| return .{.i64 = v},
-                .string => |v| return .{.string = v},
+                .i64 => |v| return .{ .i64 = v },
+                .string => |v| return .{ .string = v },
                 else => {
-                    try self.setErrorFmt("Map key must be an integer or string, got {s}", .{value.friendlyArticleName() });
+                    try self.setErrorFmt("Map key must be an integer or string, got {s}", .{value.friendlyArticleName()});
                     return error.TypeError;
                 },
             }

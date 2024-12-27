@@ -39,28 +39,30 @@ pub fn Functions(comptime A: type) type {
     };
 
     if (App == void or @hasDecl(App, "ZtlFunctions") == false) {
-        return @Type(.{.@"enum" = .{
-            .decls = &.{},
-            .tag_type = u8,
-            .fields = &.{.{.name = "", .value = 0}}, // HACK, std.meta.stringToEnum doesn't work on an empty enum, lol what?
-            .is_exhaustive = true,
-        }});
+        return @Type(.{
+            .@"enum" = .{
+                .decls = &.{},
+                .tag_type = u8,
+                .fields = &.{.{ .name = "", .value = 0 }}, // HACK, std.meta.stringToEnum doesn't work on an empty enum, lol what?
+                .is_exhaustive = true,
+            },
+        });
     }
     const declarations = std.meta.declarations(App.ZtlFunctions);
     var fields: [declarations.len]std.builtin.Type.EnumField = undefined;
 
     for (declarations, 0..) |d, i| {
-        fields[i] = .{.name = d.name, .value = i};
+        fields[i] = .{ .name = d.name, .value = i };
     }
 
     // the type of the @"enum" tag is std.builtin.Type.Enum
     // we use the type inference syntax, i.e. .{...}
-    return @Type(.{.@"enum" = .{
+    return @Type(.{ .@"enum" = .{
         .decls = &.{},
         .tag_type = u16,
         .fields = &fields,
         .is_exhaustive = true,
-    }});
+    } });
 }
 
 const t = @import("t.zig");
@@ -349,14 +351,14 @@ test "ztl: increment/decrement" {
 test "ztl: variables" {
     defer t.reset();
 
-    try testReturnValue(.{.string = "Leto"},
+    try testReturnValue(.{ .string = "Leto" },
         \\ var name = `Leto`;
         \\ return name;
     );
 
-    try testReturnValue(.{.string = "LONG"}, "var " ++ "l" ** 127 ++ " = `LONG`; return " ++ "l" ** 127 ++ ";");
+    try testReturnValue(.{ .string = "LONG" }, "var " ++ "l" ** 127 ++ " = `LONG`; return " ++ "l" ** 127 ++ ";");
 
-    try testReturnValue(.{.string = "Leto"},
+    try testReturnValue(.{ .string = "Leto" },
         \\ var name = `Leto`;
         \\ {
         \\    var name = "Ghanima" ;
@@ -364,7 +366,7 @@ test "ztl: variables" {
         \\ return name;
     );
 
-    try testReturnValue(.{.string = "other"},
+    try testReturnValue(.{ .string = "other" },
         \\ var name = `Leto`;
         \\ {
         \\    var x = "Ghanima" ;
@@ -373,7 +375,7 @@ test "ztl: variables" {
         \\ return x;
     );
 
-    try testReturnValue(.{.string = "Ghanima"},
+    try testReturnValue(.{ .string = "Ghanima" },
         \\ var name = `Leto`;
         \\ {
         \\    var name = "Ghanima" ;
@@ -571,7 +573,7 @@ test "ztl: list initialization" {
         var arr = [_]Value{
             .{ .bool = true },
             .{ .f64 = 1.992 },
-            .{.string = "over 9000!"},
+            .{ .string = "over 9000!" },
         };
         try testReturnValue(t.createListRef(&arr), "return [true, 1.992, `over 9000!`];");
     }
@@ -580,7 +582,7 @@ test "ztl: list initialization" {
         var arr = [_]Value{
             .{ .null = {} },
             .{ .i64 = 1 },
-            .{.string = "hello"},
+            .{ .string = "hello" },
         };
         try testReturnValue(t.createListRef(&arr),
             \\ var n = null;
@@ -614,7 +616,7 @@ test "ztl: list assignment" {
         \\ return arr[0];
     );
 
-    try testReturnValue(.{.string = "a"},
+    try testReturnValue(.{ .string = "a" },
         \\ var arr = [0, 1, 2];
         \\ arr[2] = "a";
         \\ return arr[2];
@@ -626,13 +628,13 @@ test "ztl: list assignment" {
         \\ return arr[2];
     );
 
-    try testReturnValue(.{.string = "x"},
+    try testReturnValue(.{ .string = "x" },
         \\ var arr = [0, 1, 2];
         \\ arr[-2] = "x";
         \\ return arr[1];
     );
 
-    try testReturnValue(.{.string = "a"},
+    try testReturnValue(.{ .string = "a" },
         \\ var arr = [0, 1, 2];
         \\ arr[-3] = "a";
         \\ return arr[0];
@@ -704,8 +706,8 @@ test "ztl: map initialization" {
 
     {
         const expected = t.createMapRef(
-            &.{"leto", "123", "a key"},
-            &.{.{.bool = true}, .{.string = "hello"}, .{.f64 = -1.23}},
+            &.{ "leto", "123", "a key" },
+            &.{ .{ .bool = true }, .{ .string = "hello" }, .{ .f64 = -1.23 } },
         );
 
         try testReturnValue(expected,
@@ -750,7 +752,7 @@ test "ztl: map assignment" {
         \\ return map[0];
     );
 
-    try testReturnValue(.{.string = "3"},
+    try testReturnValue(.{ .string = "3" },
         \\ var map = %{"a": 1, "b": 2};
         \\ map["a"] = "3";
         \\ return map["a"];
@@ -805,12 +807,12 @@ test "ztl: map assignment" {
 test "ztl: string indexing" {
     defer t.reset();
 
-    try testReturnValue(.{.string = "a"}, "return `abc`[0];");
-    try testReturnValue(.{.string = "b"}, "return `abc`[1];");
-    try testReturnValue(.{.string = "c"}, "return `abc`[2];");
-    try testReturnValue(.{.string = "c"}, "return `abc`[-1];");
-    try testReturnValue(.{.string = "b"}, "return `abc`[-2];");
-    try testReturnValue(.{.string = "a"}, "return `abc`[-3];");
+    try testReturnValue(.{ .string = "a" }, "return `abc`[0];");
+    try testReturnValue(.{ .string = "b" }, "return `abc`[1];");
+    try testReturnValue(.{ .string = "c" }, "return `abc`[2];");
+    try testReturnValue(.{ .string = "c" }, "return `abc`[-1];");
+    try testReturnValue(.{ .string = "b" }, "return `abc`[-2];");
+    try testReturnValue(.{ .string = "a" }, "return `abc`[-3];");
 
     try testRuntimeError("Index out of range. Index: 0, Len: 0", "return ``[0];");
     try testRuntimeError("Index out of range. Index: 1, Len: 0", "return ``[1];");
@@ -838,7 +840,7 @@ test "ztl: orelse" {
     try testReturnValue(.{ .i64 = 4 }, "return 4 orelse 1;");
     try testReturnValue(.{ .i64 = 2 }, "return null orelse 2;");
     try testReturnValue(.{ .i64 = 3 }, "return null orelse 2+1;");
-    try testReturnValue(.{.string = "hi"}, "return null orelse null orelse null orelse `hi`;");
+    try testReturnValue(.{ .string = "hi" }, "return null orelse null orelse null orelse `hi`;");
     try testReturnValue(.{ .i64 = 1 }, "return 1 orelse null orelse null orelse `hi`;");
 }
 
@@ -849,7 +851,7 @@ test "ztl: string dedupe" {
         pub const ZtlConfig = struct {
             pub const deduplicate_string_literals = true;
         };
-    },  .{}, .{.string = "hello"},
+    }, .{}, .{ .string = "hello" },
         \\ var x = "hello";
         \\ var y = "hello";
         \\ return x;
@@ -859,7 +861,7 @@ test "ztl: string dedupe" {
         pub const ZtlConfig = struct {
             pub const ztl_deduplicate_string_literals = false;
         };
-    }, .{}, .{.string = "hello"},
+    }, .{}, .{ .string = "hello" },
         \\ var x = "hello";
         \\ var y = "hello";
         \\ return x;
@@ -1392,14 +1394,14 @@ test "ztl: function custom" {
         pub fn call(self: *@This(), vm: *VM(*@This()), function: Functions(@This()), values: []Value) !Value {
             _ = vm;
             switch (function) {
-                .add => return .{.i64 = values[0].i64 + values[1].i64},
-                .double => return .{.i64 = values[0].i64 * 2 + self.id},
+                .add => return .{ .i64 = values[0].i64 + values[1].i64 },
+                .double => return .{ .i64 = values[0].i64 * 2 + self.id },
             }
         }
     };
 
-    var app = App{.id = 200};
-    try testReturnValueWithApp(*App, &app, .{.i64 = 1204}, "return add(1000, double(2));");
+    var app = App{ .id = 200 };
+    try testReturnValueWithApp(*App, &app, .{ .i64 = 1204 }, "return add(1000, double(2));");
 
     try testErrorWithApp(*App, "Function 'add' reserved by custom application function", "fn add(){}");
     try testErrorWithApp(*App, "Function 'add' expects 2 parameters, but called with 0", "return add());");
@@ -1588,7 +1590,7 @@ test "ztl: method sort" {
         var arr = [_]Value{
             .{ .string = "AZ" },
             .{ .string = "a" },
-            .{ .string = "ab"},
+            .{ .string = "ab" },
         };
         try testReturnValue(t.createListRef(&arr), "return [`ab`, `a`, `AZ`].sort();");
     }
@@ -1796,7 +1798,6 @@ fn testRuntimeError(expected: []const u8, src: []const u8) !void {
     };
     return error.NoError;
 }
-
 
 fn checkVMForLeaks(vm: anytype) !void {
     if (vm._ref_pool.count == 0) {

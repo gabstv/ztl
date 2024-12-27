@@ -157,7 +157,7 @@ pub const Scanner = struct {
                     pos = @intCast(end + 1);
                     return .{
                         .src = src[start..pos],
-                        .value = .{ .STRING = .{.value = src[start + 1 .. end], .escaped = false} },
+                        .value = .{ .STRING = src[start + 1 .. end] },
                         .position = self.position(start),
                     };
                 },
@@ -271,12 +271,11 @@ pub const Scanner = struct {
                 // copy the last character
                 try scratch.append(literal[i]);
             }
-            literal = scratch.items;
+            literal = try self.arena.dupe(u8, scratch.items);
         }
-
         return .{
+            .value = .{ .STRING = literal },
             .src = src[start..scanner_pos.*],
-            .value = .{ .STRING = .{.value = literal, .escaped = escape_count > 0} },
             .position = self.position(start),
         };
     }
@@ -478,14 +477,9 @@ pub const Token = struct {
         SLASH,
         STAR,
         START,
-        STRING: String,
+        STRING: []const u8,
         VAR,
         WHILE,
-    };
-
-    pub const String = struct {
-        value: []const u8,
-        escaped: bool,
     };
 
     pub const Type = enum {
@@ -600,22 +594,22 @@ test "scanner: multibyte tokens" {
 }
 
 test "scanner: string literals" {
-    try expectTokens("\"\"", &.{.{ .STRING = .{.value = "", .escaped = false} }});
+    try expectTokens("\"\"", &.{.{ .STRING = "" }});
 
     try expectTokens("\"hello world\" == \"Goodbye moon\"", &.{
-        .{ .STRING = .{.value = "hello world", .escaped = false} },
+        .{ .STRING = "hello world" },
         .{ .EQUAL_EQUAL = {} },
-        .{ .STRING = .{.value = "Goodbye moon", .escaped = false} },
+        .{ .STRING = "Goodbye moon" },
     });
 
-    try expectTokens("\" \\n \\r \\t \\\" \\' \\\\ \"", &.{.{ .STRING = .{.value = " \n \r \t \" ' \\ ", .escaped = true} }});
+    try expectTokens("\" \\n \\r \\t \\\" \\' \\\\ \"", &.{.{ .STRING = " \n \r \t \" ' \\ " }});
 
-    try expectTokens("\"\\'\"", &.{.{ .STRING = .{.value = "'", .escaped = true} }});
+    try expectTokens("\"\\'\"", &.{.{ .STRING = "'" }});
 
     try expectTokens("\"abc\"  +  \"123\\'x\"", &.{
-        .{ .STRING = .{.value = "abc", .escaped = false} },
+        .{ .STRING = "abc" },
         .{ .PLUS = {} },
-        .{ .STRING = .{.value = "123'x", .escaped = true} },
+        .{ .STRING = "123'x" },
     });
 
     {
@@ -624,15 +618,15 @@ test "scanner: string literals" {
         try expectError(" \"   \\a \" ", "invalid escape character: 'a'");
     }
 
-    try expectTokens("``", &.{.{ .STRING = .{.value = "", .escaped = false} }});
+    try expectTokens("``", &.{.{ .STRING = "" }});
 
-    try expectTokens("`hello world`", &.{.{ .STRING = .{.value = "hello world", .escaped = false} }});
+    try expectTokens("`hello world`", &.{.{ .STRING = "hello world" }});
 
-    try expectTokens("`hello\"world`", &.{.{ .STRING = .{.value = "hello\"world", .escaped = false} }});
+    try expectTokens("`hello\"world`", &.{.{ .STRING = "hello\"world" }});
 
     try expectTokens("`hel\\nlo` `world`", &.{
-        .{ .STRING = .{.value = "hel\\nlo", .escaped = false} },
-        .{ .STRING = .{.value = "world", .escaped = false} },
+        .{ .STRING = "hel\\nlo" },
+        .{ .STRING = "world" },
     });
 }
 
@@ -724,10 +718,7 @@ fn expectTokens(src: []const u8, expected: []const Token.Value) !void {
         const token = try scanner.next();
         try t.expectString(@tagName(e), @tagName(token.value));
         switch (e) {
-            .STRING => |str| {
-                try t.expectString(str.value, token.value.STRING.value);
-                try t.expectEqual(str.escaped, token.value.STRING.escaped);
-            },
+            .STRING => |str| try t.expectString(str, token.value.STRING),
             .IDENTIFIER => |str| try t.expectString(str, token.value.IDENTIFIER),
             else => try t.expectEqual(e, token.value),
         }

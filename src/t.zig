@@ -19,8 +19,8 @@ pub fn reset() void {
 
 pub fn createListRef(values: []Value) Value {
     const ref = arena.allocator().create(Value.Ref) catch unreachable;
-    ref.* = .{.value = .{.list = .{.items = values}}};
-    return .{.ref = ref};
+    ref.* = .{ .value = .{ .list = .{ .items = values } } };
+    return .{ .ref = ref };
 }
 
 pub fn createMapRef(names: []const []const u8, values: []const Value) Value {
@@ -29,13 +29,13 @@ pub fn createMapRef(names: []const []const u8, values: []const Value) Value {
 
     for (names, values) |n, v| {
         if (std.fmt.parseInt(i64, n, 10)) |as_int| {
-            map.putAssumeCapacity(.{.i64 = as_int}, v);
+            map.putAssumeCapacity(.{ .i64 = as_int }, v);
         } else |_| {
-            map.putAssumeCapacity(.{.string = n}, v);
+            map.putAssumeCapacity(.{ .string = n }, v);
         }
     }
 
     const ref = arena.allocator().create(Value.Ref) catch unreachable;
-    ref.* = .{.value = .{.map = map}};
-    return .{.ref = ref};
+    ref.* = .{ .value = .{ .map = map } };
+    return .{ .ref = ref };
 }

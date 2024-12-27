@@ -22,7 +22,7 @@ pub const CompileError = error{
 };
 
 const CompileOpts = struct {
-    force_locals:  []const []const u8 = &.{},
+    force_locals: []const []const u8 = &.{},
 };
 
 pub fn Compiler(comptime A: type) type {
@@ -40,14 +40,14 @@ pub fn Compiler(comptime A: type) type {
 
     const CustomFunctionLookup: std.StaticStringMap(CustomFunctionMeta) = if (App == void or @hasDecl(App, "ZtlFunctions") == false) blk: {
         break :blk std.StaticStringMap(CustomFunctionMeta).initComptime(.{});
-     } else blk: {
+    } else blk: {
         const fields = @typeInfo(CustomFunctions).@"enum".fields;
-        var metas: [fields.len]struct{[]const u8, CustomFunctionMeta} = undefined;
+        var metas: [fields.len]struct { []const u8, CustomFunctionMeta } = undefined;
         for (fields, 0..) |field, i| {
-            metas[i] = .{field.name, .{
+            metas[i] = .{ field.name, .{
                 .function_id = field.value,
                 .arity = @field(App.ZtlFunctions, field.name),
-            }};
+            } };
         }
         break :blk std.StaticStringMap(CustomFunctionMeta).initComptime(metas);
     };
@@ -442,7 +442,6 @@ pub fn Compiler(comptime A: type) type {
                         .depth = self.scopeDepth(),
                     }, iterable_count);
 
-
                     const breakable_scope = try jumper.newBreakableScope(self);
                     defer breakable_scope.deinit();
 
@@ -460,7 +459,7 @@ pub fn Compiler(comptime A: type) type {
                     }
 
                     if (iterable_count != variable_count) {
-                        return self.setErrorFmt(error.CompileError, "foreach must have the same number of iterables as variables (iterables: {d}, variables: {d})", .{iterable_count, variable_count});
+                        return self.setErrorFmt(error.CompileError, "foreach must have the same number of iterables as variables (iterables: {d}, variables: {d})", .{ iterable_count, variable_count });
                     }
 
                     try bc.opWithData(.FOREACH, &.{@intCast(iterable_count)});
@@ -496,7 +495,6 @@ pub fn Compiler(comptime A: type) type {
 
                     try breakable_scope.continueAt(continue_pos);
 
-
                     // back to condition check
                     try jump_loop_top.goto();
                     try jump_if_false.goto();
@@ -510,7 +508,7 @@ pub fn Compiler(comptime A: type) type {
                 },
                 .WHILE => {
                     try self.advance();
-                    const jump_loop_top = jumper.backward(self);   // at the end of each iteration, we want to jump back here
+                    const jump_loop_top = jumper.backward(self); // at the end of each iteration, we want to jump back here
 
                     try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
                     try self.expression();
@@ -668,10 +666,10 @@ pub fn Compiler(comptime A: type) type {
 
         fn string(self: *Self, _: bool) CompileError!void {
             const string_token = self._previous_token.value.STRING;
-            return self.stringLiteral(string_token.value, string_token.escaped);
+            return self.stringLiteral(string_token);
         }
 
-        fn stringLiteral(self: *Self, literal: []const u8, needs_dupe: bool) !void {
+        fn stringLiteral(self: *Self, literal: []const u8) !void {
             if (DEDUPLICATE_STRING_LITERALS == false) {
                 _ = try self._byte_code.string(literal);
                 return;
@@ -682,10 +680,7 @@ pub fn Compiler(comptime A: type) type {
             }
 
             const data_start = try self._byte_code.string(literal);
-            // if the string was escaped, we need to dupe it since it's only
-            // being held short-term by the scanner.
-            const owned = if (needs_dupe) try self._arena.dupe(u8, literal) else literal;
-            try self._string_literals.put(self._arena, owned, data_start);
+            try self._string_literals.put(self._arena, literal, data_start);
         }
 
         fn @"null"(self: *Self, _: bool) CompileError!void {
@@ -794,11 +789,11 @@ pub fn Compiler(comptime A: type) type {
                     const current_token = self._current_token;
                     switch (current_token.value) {
                         .INTEGER => |k| try bc.i64(k),
-                        .IDENTIFIER => |k| try self.stringLiteral(k, false),
-                        .STRING => |k| try self.stringLiteral(k.value, k.escaped),
+                        .IDENTIFIER => |k| try self.stringLiteral(k),
+                        .STRING => |k| try self.stringLiteral(k),
                         else => {
                             return self.setErrorFmt(error.CompileError, "Map key must be an integer, string or identifier, got '{s}' ({s})", .{ current_token.src, @tagName(current_token.value) });
-                        }
+                        },
                     }
                     try self.advance();
                     try self.consume(.COLON, "key : value separator (':')");
@@ -872,7 +867,7 @@ pub fn Compiler(comptime A: type) type {
             if (gop.found_existing == false) {
                 gop.value_ptr.* = try self.newFunction(name);
             }
-            try self._function_calls.append(self._arena, .{.name = name, .arity = @intCast(arity)});
+            try self._function_calls.append(self._arena, .{ .name = name, .arity = @intCast(arity) });
             return self._byte_code.opWithData(.CALL, std.mem.asBytes(&gop.value_ptr.data_pos));
         }
 
@@ -1108,7 +1103,7 @@ pub fn Compiler(comptime A: type) type {
             var arity: u8 = 0;
             while (true) {
                 if (arity == max_arity) {
-                    try self.setErrorFmt(error.CompileError, "call supports up to {d} parameters, got: {d}", .{max_arity, arity});
+                    try self.setErrorFmt(error.CompileError, "call supports up to {d} parameters, got: {d}", .{ max_arity, arity });
                     unreachable;
                 }
                 arity += 1;
@@ -1144,7 +1139,7 @@ pub fn Compiler(comptime A: type) type {
         }
 
         fn setErrorWrongArity(self: *Self, name: []const u8, expected: u8, actual: u8) !void {
-            return self.setErrorFmt(error.CompileError, "Function '{s}' expects {d} parameter{s}, but called with {d}", .{name, expected, if (expected == 1) "" else "s", actual});
+            return self.setErrorFmt(error.CompileError, "Function '{s}' expects {d} parameter{s}, but called with {d}", .{ name, expected, if (expected == 1) "" else "s", actual });
         }
     };
 }
@@ -1177,7 +1172,6 @@ const Function = struct {
     };
 };
 
-
 const CustomFunctionMeta = struct {
     arity: u8,
     function_id: u16,
@@ -1197,7 +1191,6 @@ const CustomFunctionMeta = struct {
 //     - break and continue both take a jump count, i.e. break 2, which makes the
 //       above even more complicated.
 fn Jumper(comptime App: type) type {
-
     const OpCode = @import("byte_code.zig").OpCode;
 
     return struct {
@@ -1224,19 +1217,13 @@ fn Jumper(comptime App: type) type {
         // then jump back to the top)
         continue_scopes: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u32)),
 
-
         // For each scope, we record how deep we should pop on a break/continue
         pop_depths: std.ArrayListUnmanaged(usize),
 
         const Self = @This();
 
         fn init(arena: Allocator) Self {
-            return .{
-                .arena = arena,
-                .pop_depths = .{},
-                .break_scopes = .{},
-                .continue_scopes = .{}
-            };
+            return .{ .arena = arena, .pop_depths = .{}, .break_scopes = .{}, .continue_scopes = .{} };
         }
 
         fn forward(_: *const Self, compiler: *Compiler(App), op_code: OpCode) !Forward {
@@ -1284,7 +1271,7 @@ fn Jumper(comptime App: type) type {
                 if (pop_depths.len == 0) {
                     return compiler.setError(error.CompileError, "'" ++ op ++ "' cannot be used outside of loop");
                 }
-                return compiler.setErrorFmt(error.CompileError, "'" ++ op ++ " {d}' is invalid (current loop nesting: {d})", .{levels, pop_depths.len});
+                return compiler.setErrorFmt(error.CompileError, "'" ++ op ++ " {d}' is invalid (current loop nesting: {d})", .{ levels, pop_depths.len });
             }
 
             // so we want to revert the scope by N levels. To figure this out,
@@ -1302,7 +1289,7 @@ fn Jumper(comptime App: type) type {
             }
 
             try bc.op(.JUMP);
-           // create placeholder for jump address
+            // create placeholder for jump address
             const jump_from = bc.currentPos();
             try bc.write(&.{ 0, 0 });
 
@@ -1350,7 +1337,7 @@ fn Jumper(comptime App: type) type {
                 // back over the JUMP instruction we're writing).
                 const jump_from = bc.currentPos() + 1;
 
-               const relative: i64 = -(@as(i64, jump_from) - jump_to);
+                const relative: i64 = -(@as(i64, jump_from) - jump_to);
                 if (relative < -32_768) {
                     return self.compiler.setError(error.CompileError, "Jump size exceeded maximum allowed value");
                 }
@@ -1387,7 +1374,7 @@ fn Jumper(comptime App: type) type {
                 var bc = &self.compiler._byte_code;
 
                 for (list) |jump_from| {
-                   const relative: i64 = @as(i64, jump_to) - jump_from;
+                    const relative: i64 = @as(i64, jump_to) - jump_from;
                     if (relative > 32_767 or relative < -32_768) {
                         return self.compiler.setError(error.CompileError, "Jump size exceeded maximum allowed value");
                     }

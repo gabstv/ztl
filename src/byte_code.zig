@@ -61,7 +61,7 @@ pub fn ByteCode(comptime App: type) type {
         }
 
         pub fn op2(self: *Self, op_code1: OpCode, op_code2: OpCode) !void {
-            return self.frame.write(self.allocator, &.{@intFromEnum(op_code1), @intFromEnum(op_code2)});
+            return self.frame.write(self.allocator, &.{ @intFromEnum(op_code1), @intFromEnum(op_code2) });
         }
 
         pub fn opWithData(self: *Self, op_code: OpCode, data: []const u8) !void {
@@ -121,7 +121,7 @@ pub fn ByteCode(comptime App: type) type {
             }
         }
 
-       pub fn debugVariableName(self: *Self, name: []const u8, idx: LocalIndex) !void {
+        pub fn debugVariableName(self: *Self, name: []const u8, idx: LocalIndex) !void {
             std.debug.assert(comptime config.shouldDebug(App, .full));
             try self.debug(.VARIABLE_NAME, SL + 1 + @as(u8, @intCast(name.len)));
             try self.frame.write(self.allocator, std.mem.asBytes(&idx));
@@ -129,8 +129,7 @@ pub fn ByteCode(comptime App: type) type {
             try self.frame.write(self.allocator, name);
         }
 
-
-       pub fn comment(self: *Self, value: []const u8) !void {
+        pub fn comment(self: *Self, value: []const u8) !void {
             if (comptime config.shouldDebug(App, .full)) {
                 const u16_len = @as(u16, @intCast(value.len));
                 try self.debug(.COMMENT, 2 + u16_len);
@@ -199,7 +198,7 @@ pub fn ByteCode(comptime App: type) type {
 
         pub fn insertInt(self: *Self, comptime T: type, pos: u32, value: T) void {
             const end = pos + @sizeOf(T);
-            @memcpy(self.frame.buf[pos .. end], std.mem.asBytes(&value));
+            @memcpy(self.frame.buf[pos..end], std.mem.asBytes(&value));
         }
 
         pub fn @"i64"(self: *Self, value: i64) !void {
@@ -400,7 +399,7 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                         i += variable_name_length;
                     },
                     .COMMENT => {
-                        const len = @as(u16, @bitCast(code[i..i+2][0..2].*));
+                        const len = @as(u16, @bitCast(code[i .. i + 2][0..2].*));
                         i += 2;
 
                         // if the comment starts with a newline, we want to put that
@@ -452,12 +451,12 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
             },
             .SET_LOCAL => {
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
-                try std.fmt.format(writer, " {s}@{d}\n", .{variable_names.get(idx) orelse "", idx});
+                try std.fmt.format(writer, " {s}@{d}\n", .{ variable_names.get(idx) orelse "", idx });
                 i += SL;
             },
             .GET_LOCAL => {
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
-                try std.fmt.format(writer, " {s}@{d}\n", .{variable_names.get(idx) orelse "", idx});
+                try std.fmt.format(writer, " {s}@{d}\n", .{ variable_names.get(idx) orelse "", idx });
                 i += SL;
             },
             .PROPERTY_GET => {
@@ -471,7 +470,7 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
 
                 const m: Method = @enumFromInt(@as(u16, @bitCast(code[i .. i + 2][0..2].*)));
                 i += 2;
-                try std.fmt.format(writer, " {s}({d})\n", .{@tagName(m), arity});
+                try std.fmt.format(writer, " {s}({d})\n", .{ @tagName(m), arity });
             },
             .INCR => {
                 // i += 0 is pretty rare. So use value 0 for -1, which is more
@@ -480,7 +479,7 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 i += 1;
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
                 i += SL;
-                try std.fmt.format(writer, " {s}@{d} {d}\n", .{ variable_names.get(idx) orelse "", idx, value});
+                try std.fmt.format(writer, " {s}@{d} {d}\n", .{ variable_names.get(idx) orelse "", idx, value });
             },
             .INITIALIZE => {
                 const initialize_type: OpCode.Initialize = @enumFromInt(code[i]);
@@ -488,9 +487,9 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 switch (initialize_type) {
                     .ARRAY, .MAP => {
                         const value_count: u32 = @bitCast(code[i .. i + 4][0..4].*);
-                        try std.fmt.format(writer, " {s} {d}\n", .{@tagName(initialize_type), value_count});
+                        try std.fmt.format(writer, " {s} {d}\n", .{ @tagName(initialize_type), value_count });
                         i += 4;
-                    }
+                    },
                 }
             },
             .POP => {
@@ -502,7 +501,7 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 const arity = code[i];
                 i += 1;
 
-                const function_id = @as(u16, @bitCast(code[i..i + 2][0..2].*));
+                const function_id = @as(u16, @bitCast(code[i .. i + 2][0..2].*));
                 i += 2;
 
                 const name = @tagName(@as(ztl.Functions(App), @enumFromInt(function_id)));

@@ -94,7 +94,7 @@ pub fn Template(comptime App: type) type {
             // stack).
 
             var compiler = try Compiler(App).init(build_allocator);
-            compiler.compile(zt_src, .{.force_locals = self.globals}) catch |err| {
+            compiler.compile(zt_src, .{ .force_locals = self.globals }) catch |err| {
                 if (compiler.err) |ce| {
                     self.err = try template_arena.dupe(u8, ce.desc);
                 }
@@ -142,7 +142,7 @@ pub fn Template(comptime App: type) type {
                         sortVariableNames(&field_names);
                         break :blk field_names;
                     };
-                    inline for(field_names) |name| {
+                    inline for (field_names) |name| {
                         const value = vm.createValue(@field(globals, name)) catch {
                             if (opts.error_report) |er| {
                                 er.message = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(globals, name)));
@@ -255,17 +255,18 @@ pub fn Template(comptime App: type) type {
             return buf.items;
         }
 
-        fn findCodeEnd(self: *Self, scanner: *Scanner, src: []const u8, pos: usize) !struct{usize, usize, bool} {
+        fn findCodeEnd(self: *Self, scanner: *Scanner, src: []const u8, pos: usize) !struct { usize, usize, bool } {
             scanner.reset(src[pos..]);
             while (self.scanNext(scanner)) |token| switch (token.value) {
                 .PERCENT => {
                     switch ((try self.scanNext(scanner)).value) {
-                        .GREATER, => return .{pos + token.position.pos, 2, false},
+                        .GREATER,
+                        => return .{ pos + token.position.pos, 2, false },
                         else => {},
                     }
                 },
-                 .MINUS => if (scanner.peek(&.{.PERCENT, .GREATER})) {
-                    return .{pos + token.position.pos, 3, true};
+                .MINUS => if (scanner.peek(&.{ .PERCENT, .GREATER })) {
+                    return .{ pos + token.position.pos, 3, true };
                 },
                 .EOF => {
                     self.err = "Missing expected end tag, '%>'";
@@ -287,7 +288,7 @@ pub fn Template(comptime App: type) type {
             while (self.scanNext(&scanner)) |token| switch (token.value) {
                 .IDENTIFIER => |name| {
                     if (name[0] == '@') {
-                       _ = try globals.getOrPut(allocator, name);
+                        _ = try globals.getOrPut(allocator, name);
                     }
                 },
                 .EOF => return globals,
@@ -364,7 +365,7 @@ fn appendOut(buf: *std.ArrayList(u8), content: []const u8, trim_left: bool) !voi
 fn sortVariableNames(values: [][]const u8) void {
     std.mem.sort([]const u8, values, {}, struct {
         fn sort(_: void, lhs: []const u8, rhs: []const u8) bool {
-             return std.mem.order(u8, lhs, rhs) == .lt;
+            return std.mem.order(u8, lhs, rhs) == .lt;
         }
     }.sort);
 }
@@ -408,22 +409,23 @@ test "Template: output literals" {
 }
 
 test "Template: output variable" {
-    try testTemplate("Leto", "<%= @name %>", .{.name = "Leto"});
-    try testTemplate("7", "<%= @x + 1 %>", .{.x = 6});
+    try testTemplate("Leto", "<%= @name %>", .{ .name = "Leto" });
+    try testTemplate("7", "<%= @x + 1 %>", .{ .x = 6 });
 }
 
 test "Template: space stripping" {
-    try testTemplate("  Leto   ", "  <%= @name %>   ", .{.name = "Leto"});
-    try testTemplate("Leto   ", "  <%-= @name %>   ", .{.name = "Leto"});
-    try testTemplate("  Leto", "  <%= @name -%>  ", .{.name = "Leto"});
-    try testTemplate("Leto", "  <%-= @name -%>  ", .{.name = "Leto"});
+    try testTemplate("  Leto   ", "  <%= @name %>   ", .{ .name = "Leto" });
+    try testTemplate("Leto   ", "  <%-= @name %>   ", .{ .name = "Leto" });
+    try testTemplate("  Leto", "  <%= @name -%>  ", .{ .name = "Leto" });
+    try testTemplate("Leto", "  <%-= @name -%>  ", .{ .name = "Leto" });
 }
 
 test "Template: local and global" {
-    try testTemplate("12", \\
+    try testTemplate("12",
+        \\
         \\ <%- var x = 2; -%>
         \\ <%-= x + @count -%>
-    , .{.count = 10});
+    , .{ .count = 10 });
 }
 
 test "Template: for loop" {
@@ -437,7 +439,7 @@ test "Template: for loop" {
         \\<%- for (var i = 0; i < @products.len; i++) { %>
         \\  product: <%= @products[i] -%>
         \\<%- } %>
-    , .{.products = [_]i64{10, 22, 33}});
+    , .{ .products = [_]i64{ 10, 22, 33 } });
 }
 
 test "Template: errors in template" {
@@ -456,8 +458,8 @@ test "Template: runtime error" {
 test "Template: map global" {
     const globals = try t.allocator.alloc(Global, 2);
     defer t.allocator.free(globals);
-    globals[0] = .{"key_2", .{.i64 = 123}};
-    globals[1] = .{"a", .{.string = "hello"}};
+    globals[0] = .{ "key_2", .{ .i64 = 123 } };
+    globals[1] = .{ "a", .{ .string = "hello" } };
     try testTemplate("hello 123", "<%= @a %> <%= @key_2 %>", globals);
 }
 
@@ -514,7 +516,7 @@ fn testTemplateRuntimeError(expected: []const u8, template: []const u8) !void {
     defer buf.deinit();
 
     var report = ErrorReport{};
-    tmpl.render(buf.writer(), .{}, .{.error_report = &report}) catch {
+    tmpl.render(buf.writer(), .{}, .{ .error_report = &report }) catch {
         defer report.deinit();
         try t.expectString(expected, report.message);
         return;

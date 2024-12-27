@@ -205,7 +205,7 @@ pub const Value = union(enum) {
                 },
                 .f64 => |l| switch (rhs) {
                     .i64 => |r| return math.order(l, @as(f64, @floatFromInt(r))),
-                     else => {},
+                    else => {},
                 },
                 else => {},
             }
@@ -258,7 +258,7 @@ pub const Value = union(enum) {
                     .map_iterator => return .lt,
                     .list_iterator => return .lt,
                 }
-            }
+            },
         }
     }
 };
@@ -273,22 +273,25 @@ pub const KeyValue = union(enum) {
 
     pub fn write(self: KeyValue, writer: anytype) !void {
         switch (self) {
-            .i64, => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
+            .i64,
+            => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
             .string => |v| try writer.writeAll(v),
         }
     }
 
-
     pub fn toValue(self: KeyValue) Value {
         switch (self) {
-            .i64, => |v| return .{.i64 = v},
-            .string, => |v| return .{.string = v},
+            .i64,
+            => |v| return .{ .i64 = v },
+            .string,
+            => |v| return .{ .string = v },
         }
     }
 
     pub fn equal(self: KeyValue, other: KeyValue) bool {
         switch (self) {
-            .i64, => |l| switch (other) {
+            .i64,
+            => |l| switch (other) {
                 .i64 => |r| return l == r,
                 .string => return false,
             },
@@ -375,27 +378,19 @@ test "Value: format" {
 
     try assertFormat("null", .{ .null = {} });
 
-    try assertFormat("", .{.string = ""});
-    try assertFormat("hello world", .{.string = "hello world"});
+    try assertFormat("", .{ .string = "" });
+    try assertFormat("hello world", .{ .string = "hello world" });
 
     {
         var arr = [_]Value{};
         try assertFormat("[]", t.createListRef(&arr));
     }
 
-    var arr = [_]Value{
-        .{ .i64 = -3 },
-        .{ .bool = true },
-        .{.string = "over 9000"}
-    };
+    var arr = [_]Value{ .{ .i64 = -3 }, .{ .bool = true }, .{ .string = "over 9000" } };
     try assertFormat("[-3, true, over 9000]", t.createListRef(&arr));
 
-
     try assertFormat("{}", t.createMapRef(&.{}, &.{}));
-    try assertFormat("{name: Leto, 123: true, arr: [-3, true, over 9000]}", t.createMapRef(
-        &.{"name", "123", "arr"},
-        &.{.{.string = "Leto"}, .{.bool = true}, t.createListRef(&arr)}
-    ));
+    try assertFormat("{name: Leto, 123: true, arr: [-3, true, over 9000]}", t.createMapRef(&.{ "name", "123", "arr" }, &.{ .{ .string = "Leto" }, .{ .bool = true }, t.createListRef(&arr) }));
 }
 
 test "Value: equal" {
@@ -424,10 +419,10 @@ test "Value: equal" {
     try assertEqual(false, .{ .bool = true }, .{ .null = {} });
     try assertEqual(false, .{ .bool = false }, .{ .null = {} });
 
-    try assertEqual(true, .{.string = ""}, .{.string = ""});
-     try assertEqual(true, .{.string = "abc123"}, .{.string = "abc123"});
-    try assertEqual(false, .{.string = "abc123"}, .{.string = "ABC123"});
-    try assertEqual(false, .{.string = "abc123"}, .{ .null = {} });
+    try assertEqual(true, .{ .string = "" }, .{ .string = "" });
+    try assertEqual(true, .{ .string = "abc123" }, .{ .string = "abc123" });
+    try assertEqual(false, .{ .string = "abc123" }, .{ .string = "ABC123" });
+    try assertEqual(false, .{ .string = "abc123" }, .{ .null = {} });
 
     try assertEqual(true, .{ .null = {} }, .{ .null = {} });
     try assertEqual(false, .{ .null = {} }, .{ .i64 = 0 });
@@ -444,13 +439,13 @@ test "Value: equal" {
     var arr1 = [_]Value{
         .{ .i64 = -3 },
         .{ .bool = true },
-        .{.string = "over 9000"},
+        .{ .string = "over 9000" },
     };
 
     var arr2 = [_]Value{
         .{ .i64 = -3 },
         .{ .bool = true },
-        .{.string = "over 9000!!"},
+        .{ .string = "over 9000!!" },
     };
 
     var arr3 = [_]Value{
@@ -465,35 +460,23 @@ test "Value: equal" {
     try assertEqual(false, t.createListRef(&arr2), .{ .null = {} });
     try assertEqualIncompatible(t.createListRef(&arr2), .{ .i64 = 2 });
     try assertEqualIncompatible(t.createListRef(&arr2), .{ .f64 = -95.11 });
-    try assertEqualIncompatible(t.createListRef(&arr2), .{.string = "hello"});
+    try assertEqualIncompatible(t.createListRef(&arr2), .{ .string = "hello" });
     try assertEqualIncompatible(t.createListRef(&arr2), .{ .bool = true });
 
-    const map1 = t.createMapRef(
-        &.{"name", "123", "arr"},
-        &.{.{.string = "Leto"}, .{.bool = true}, t.createListRef(&arr1)}
-    );
+    const map1 = t.createMapRef(&.{ "name", "123", "arr" }, &.{ .{ .string = "Leto" }, .{ .bool = true }, t.createListRef(&arr1) });
 
-    const map2 = t.createMapRef(
-        &.{"name", "123", "arr"},
-        &.{.{.string = "Leto"}, .{.bool = true}, t.createListRef(&arr1)}
-    );
+    const map2 = t.createMapRef(&.{ "name", "123", "arr" }, &.{ .{ .string = "Leto" }, .{ .bool = true }, t.createListRef(&arr1) });
 
     // 122 is a different key
-    const map3 = t.createMapRef(
-        &.{"name", "122", "arr"},
-        &.{.{.string = "Leto"}, .{.bool = true}, t.createListRef(&arr1)}
-    );
+    const map3 = t.createMapRef(&.{ "name", "122", "arr" }, &.{ .{ .string = "Leto" }, .{ .bool = true }, t.createListRef(&arr1) });
 
     // LETO is a different value
-    const map4 = t.createMapRef(
-        &.{"name", "123", "arr"},
-        &.{.{.string = "LETO"}, .{.bool = true}, t.createListRef(&arr1)}
-    );
+    const map4 = t.createMapRef(&.{ "name", "123", "arr" }, &.{ .{ .string = "LETO" }, .{ .bool = true }, t.createListRef(&arr1) });
 
     // extra key
     const map5 = t.createMapRef(
-        &.{"name", "123", "arr", "more"},
-        &.{.{.string = "LETO"}, .{.bool = true}, t.createListRef(&arr1), .{.f64 = 1.344}},
+        &.{ "name", "123", "arr", "more" },
+        &.{ .{ .string = "LETO" }, .{ .bool = true }, t.createListRef(&arr1), .{ .f64 = 1.344 } },
     );
 
     try assertEqual(true, map1, map1);
@@ -505,7 +488,7 @@ test "Value: equal" {
     try assertEqual(false, map1, .{ .null = {} });
     try assertEqualIncompatible(map1, .{ .i64 = 2 });
     try assertEqualIncompatible(map1, .{ .f64 = -95.11 });
-    try assertEqualIncompatible(map1, .{.string = "hello"});
+    try assertEqualIncompatible(map1, .{ .string = "hello" });
     try assertEqualIncompatible(map1, .{ .bool = true });
 }
 
