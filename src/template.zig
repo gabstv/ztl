@@ -251,12 +251,17 @@ fn _translateToZt(allocator: Allocator, src: []const u8, error_report: ?*Compile
         const code_end, const tag_end, trim_left = try findCodeEnd(&scanner, src, pos);
         if (next == '=') {
             pos += 1; // skip the =
-            const ELZ_SET_EXP = "\n$";
-            const expression = std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace);
 
+            var elz_set_exp: []const u8 = "\n$";
+
+            var expression = std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace);
             if (expression.len > 0) {
-                try buf.ensureUnusedCapacity(ELZ_SET_EXP.len + expression.len + 2);
-                buf.appendSliceAssumeCapacity(ELZ_SET_EXP);
+                if (std.mem.startsWith(u8, expression, "escape ")) {
+                    elz_set_exp = "\n$$";
+                    expression = expression["escape ".len..];
+                }
+                try buf.ensureUnusedCapacity(elz_set_exp.len + expression.len + 2);
+                buf.appendSliceAssumeCapacity(elz_set_exp);
                 buf.appendSliceAssumeCapacity(expression);
                 if (expression[expression.len - 1] != ';') {
                     buf.appendSliceAssumeCapacity(";");
@@ -417,6 +422,11 @@ test "Template: space stripping" {
     try testTemplate("Leto", "  <%-= @name -%>  ", .{ .name = "Leto" });
 }
 
+test "Template: escaping" {
+    try testTemplate("<h1>hello</h1>", "<%= @name %>", .{ .name = "<h1>hello</h1>" });
+    try testTemplate("&lt;h1&gt;hello&lt;/h1&gt;", "<%= escape @name %>", .{ .name = "<h1>hello</h1>" });
+}
+
 test "Template: local and global" {
     try testTemplate("12",
         \\
@@ -544,7 +554,6 @@ fn testTemplateError(expected: []const u8, template: []const u8) !void {
     return error.NoError;
 }
 
-
 fn testTemplateFullError(expected: []const u8, template: []const u8) !void {
     var tmpl = Template(void).init(t.allocator, {});
     defer tmpl.deinit();
@@ -554,7 +563,6 @@ fn testTemplateFullError(expected: []const u8, template: []const u8) !void {
         var buf: std.ArrayListUnmanaged(u8) = .{};
         defer buf.deinit(t.allocator);
 
-        std.debug.print("A\n", .{});
         std.debug.print("{any}\n", .{error_report});
         try std.fmt.format(buf.writer(t.allocator), "{}", .{error_report});
         try t.expectString(expected, buf.items);

@@ -15,6 +15,10 @@ pub const Value = union(enum) {
     ref: *Ref,
     string: []const u8,
 
+    pub fn format(self: Value, _: []const u8, _: anytype, writer: anytype) !void {
+        return self.write(writer, false);
+    }
+
     pub const Ref = struct {
         count: u16 = 1,
         value: union(enum) {
@@ -26,17 +30,13 @@ pub const Value = union(enum) {
         },
     };
 
-    pub fn format(self: Value, _: []const u8, _: anytype, writer: anytype) !void {
-        return self.write(writer);
-    }
-
-    pub fn write(self: Value, writer: anytype) !void {
+    pub fn write(self: Value, writer: anytype, escape: bool) !void {
         switch (self) {
             .i64 => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
             .bool => |v| return writer.writeAll(if (v) "true" else "false"),
             .f64 => |v| return std.fmt.format(writer, "{d}", .{v}),
             .null => return writer.writeAll("null"),
-            .string => |v| try writer.writeAll(v),
+            .string => |v| if (escape) try writeStringEscaped(writer, v) else try writer.writeAll(v),
             .ref => |ref| switch (ref.value) {
                 .list => |list| {
                     var items = list.items;
@@ -44,10 +44,10 @@ pub const Value = union(enum) {
                         return writer.writeAll("[]");
                     }
                     try writer.writeByte('[');
-                    try items[0].write(writer);
+                    try items[0].write(writer, escape);
                     for (items[1..]) |v| {
                         try writer.writeAll(", ");
-                        try v.write(writer);
+                        try v.write(writer, escape);
                     }
                     return writer.writeByte(']');
                 },
@@ -55,15 +55,15 @@ pub const Value = union(enum) {
                     var it = map.iterator();
                     try writer.writeByte('{');
                     if (it.next()) |first| {
-                        try first.key_ptr.*.write(writer);
+                        try first.key_ptr.*.write(writer, escape);
                         try writer.writeAll(": ");
-                        try first.value_ptr.*.write(writer);
+                        try first.value_ptr.*.write(writer, escape);
 
                         while (it.next()) |kv| {
                             try writer.writeAll(", ");
-                            try kv.key_ptr.*.write(writer);
+                            try kv.key_ptr.*.write(writer, escape);
                             try writer.writeAll(": ");
-                            try kv.value_ptr.*.write(writer);
+                            try kv.value_ptr.*.write(writer, escape);
                         }
                     }
                     return writer.writeByte('}');
@@ -71,9 +71,9 @@ pub const Value = union(enum) {
                 .list_iterator => return writer.writeAll("[...]"),
                 .map_iterator => return writer.writeAll("{...}"),
                 .map_entry => |entry| {
-                    try entry.key_ptr.*.write(writer);
+                    try entry.key_ptr.*.write(writer, escape);
                     try writer.writeAll(": ");
-                    return entry.value_ptr.*.write(writer);
+                    return entry.value_ptr.*.write(writer, escape);
                 },
             },
         }
@@ -268,30 +268,26 @@ pub const KeyValue = union(enum) {
     string: []const u8,
 
     pub fn format(self: KeyValue, _: []const u8, _: anytype, writer: anytype) !void {
-        return self.write(writer);
+        return self.write(writer, false);
     }
 
-    pub fn write(self: KeyValue, writer: anytype) !void {
+    pub fn write(self: KeyValue, writer: anytype, escape: bool) !void {
         switch (self) {
-            .i64,
-            => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
-            .string => |v| try writer.writeAll(v),
+            .i64 => |v| return std.fmt.formatInt(v, 10, .lower, .{}, writer),
+            .string => |v| if (escape) try writeStringEscaped(writer, v) else try writer.writeAll(v),
         }
     }
 
     pub fn toValue(self: KeyValue) Value {
         switch (self) {
-            .i64,
-            => |v| return .{ .i64 = v },
-            .string,
-            => |v| return .{ .string = v },
+            .i64 => |v| return .{ .i64 = v },
+            .string => |v| return .{ .string = v },
         }
     }
 
     pub fn equal(self: KeyValue, other: KeyValue) bool {
         switch (self) {
-            .i64,
-            => |l| switch (other) {
+            .i64 => |l| switch (other) {
                 .i64 => |r| return l == r,
                 .string => return false,
             },
@@ -350,6 +346,25 @@ pub const MapIterator = struct {
     inner: Value.Map.Iterator,
     ref: *Value.Ref, // the Value.Ref of the map, which we need to deference when the iterator goes out of scope
 };
+
+fn writeStringEscaped(writer: anytype, value: []const u8) !void {
+    var v = value;
+    while (v.len > 0) {
+        const index = std.mem.indexOfAnyPos(u8, v, 0, &.{'&', '<', '>', '"', '\''}) orelse {
+            return writer.writeAll(v);
+        };
+        try writer.writeAll(v[0..index]);
+        switch (v[index]) {
+            '&' => try writer.writeAll("&amp;"),
+            '<' => try writer.writeAll("&lt;"),
+            '>' => try writer.writeAll("&gt;"),
+            '"' => try writer.writeAll("&#34;"),
+            '\'' => try writer.writeAll("&#39;"),
+            else => unreachable,
+        }
+        v = v[index+1..];
+    }
+}
 
 const t = @import("t.zig");
 test "Value: isTrue" {
@@ -490,6 +505,29 @@ test "Value: equal" {
     try assertEqualIncompatible(map1, .{ .f64 = -95.11 });
     try assertEqualIncompatible(map1, .{ .string = "hello" });
     try assertEqualIncompatible(map1, .{ .bool = true });
+}
+
+test "writeStringEscaped" {
+    var buf = std.ArrayList(u8).init(t.allocator);
+    defer buf.deinit();
+
+    // {
+    //     try writeStringEscaped(buf.writer(), "hello world");
+    //     try t.expectString("hello world", buf.items);
+    //     buf.clearRetainingCapacity();
+    // }
+
+    // {
+    //     try writeStringEscaped(buf.writer(), "<>\"'&");
+    //     try t.expectString("&lt;&gt;&#34;&#39;&amp;", buf.items);
+    //     buf.clearRetainingCapacity();
+    // }
+
+    {
+        try writeStringEscaped(buf.writer(), " < > \" ' & ");
+        try t.expectString(" &lt; &gt; &#34; &#39; &amp; ", buf.items);
+        buf.clearRetainingCapacity();
+    }
 }
 
 fn assertFormat(expected: []const u8, value: Value) !void {

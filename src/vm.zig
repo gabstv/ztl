@@ -109,7 +109,12 @@ pub fn VM(comptime App: type) type {
                     },
                     .OUTPUT => {
                         var value = stack.pop();
-                        try value.write(writer);
+                        try value.write(writer,false);
+                        self.release(value);
+                    },
+                    .OUTPUT_ESCAPE => {
+                        var value = stack.pop();
+                        try value.write(writer, true);
                         self.release(value);
                     },
                     .CONSTANT_I64 => {
@@ -473,10 +478,10 @@ pub fn VM(comptime App: type) type {
                                 std.debug.lockStdErr();
                                 defer std.debug.unlockStdErr();
                                 const stderr = std.io.getStdErr().writer();
-                                try items[start_index].write(stderr);
+                                try items[start_index].write(stderr, false);
                                 for (items[start_index + 1 ..]) |value| {
                                     try stderr.writeAll(" ");
-                                    try value.write(stderr);
+                                    try value.write(stderr, false);
                                 }
                                 try stderr.writeAll("\n");
                             }

@@ -10,6 +10,7 @@ const Token = @import("scanner.zig").Token;
 const Scanner = @import("scanner.zig").Scanner;
 const Method = @import("vm.zig").Method;
 const Property = @import("vm.zig").Property;
+const OpCode = @import("byte_code.zig").OpCode;
 const ByteCode = @import("byte_code.zig").ByteCode;
 const ErrorReport = @import("error_report.zig").Compile;
 
@@ -318,9 +319,11 @@ pub fn Compiler(comptime A: type) type {
                 },
                 .DOLLAR => {
                     try self.advance();
+                    const op =  if (try self.match(.DOLLAR)) OpCode.OUTPUT_ESCAPE else OpCode.OUTPUT;
                     try self.expression();
                     try self.consume(.SEMICOLON, "semicolon (';')");
-                    try bc.op(.OUTPUT);
+                    try bc.op(op);
+
                 },
                 .IF => {
                     try self.advance();
@@ -1225,8 +1228,6 @@ const CustomFunctionMeta = struct {
 //     - break and continue both take a jump count, i.e. break 2, which makes the
 //       above even more complicated.
 fn Jumper(comptime App: type) type {
-    const OpCode = @import("byte_code.zig").OpCode;
-
     return struct {
         arena: Allocator,
 

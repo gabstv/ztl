@@ -566,6 +566,7 @@ pub const OpCode = enum(u8) {
     NEGATE,
     NOT,
     OUTPUT,
+    OUTPUT_ESCAPE,
     POP,
     PROPERTY_GET,
     PRINT,

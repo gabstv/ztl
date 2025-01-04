@@ -380,7 +380,6 @@ pub const Token = union(enum) {
 
 
     pub fn format(self: Token, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-
         switch (self) {
             .AND => return writer.writeAll("and"),
             .BANG => return writer.writeAll("!"),

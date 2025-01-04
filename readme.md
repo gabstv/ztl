@@ -8,7 +8,7 @@ defer template.deinit();
 try template.compile(
     \\ <h2>Products</h2>
     \\ <% foreach (@product) |product| { %>
-    \\     <%= product["name"] %> 
+    \\     <%= escape product["name"] %> 
     \\ <%- } %>
 , .{});
 
@@ -33,7 +33,15 @@ The project is in early development and has not seen much dogfooding. Looking fo
 Better error reporting is high on the list of things to add.
 
 ## Template Overview
-Output tags, `<%= %>` support space trimming via `<%-=` and `-%>`. Variables passed into the `render` method must be prefixed with `@`.
+Output tags, `<%= %>`, support space trimming via `<%-=` and `-%>`. 
+
+By default, output is not escaped. You can use the `escape` keyword to apply basic HTML encoding:
+
+```
+<%= escape product["name"] %>
+```
+
+Variables passed into the `render` method must be prefixed with `@`.
 
 The language supports the following types:
 * i64
