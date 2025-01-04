@@ -41,6 +41,8 @@ By default, output is not escaped. You can use the `escape` keyword to apply bas
 <%= escape product["name"] %>
 ```
 
+Alternatively, you can set `ZtlConfig.escape_by_default` to true to have escape on by default. In this case the special "escape" is invalid, however the "safe" keyword can be used to output the value as-is.
+
 Variables passed into the `render` method must be prefixed with `@`.
 
 The language supports the following types:
@@ -186,6 +188,7 @@ const MyAppsTemplate = struct {
         pub const initial_data_size: u32 = 512;
         pub const deduplicate_string_literals: bool = true;
         pub const allow_leaks: bool = true;
+        pub const escape_by_default: bool = false;
     };
 
     // Defines the function and the number of arguments they take
@@ -207,7 +210,6 @@ const MyAppsTemplate = struct {
 ```
 
 The above `call` is unsafe. While the # of parameters is enforced (i.e. `values.len` is guaranteed to be 2 for `add` and 1 for `double`), the types are unknown. I plan on adding utilities to deal with the `ztl.Value` tagged union.
-
 
 Notice that the first parameter to `call` is an instance of the type itself. This is given to `Template.init`. Thus you can attach any application-specific data here and have access to it in `call`.
 

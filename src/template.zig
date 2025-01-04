@@ -20,6 +20,8 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 // what's going on.
 
 pub fn Template(comptime App: type) type {
+    const ESCAPE_BY_DEFAULT = config.extract(App, "escape_by_default");
+
     return struct {
         app: App,
         allocator: Allocator,
@@ -49,7 +51,7 @@ pub fn Template(comptime App: type) type {
 
             const build_allocator = build_arena.allocator();
 
-            const zt_src = try _translateToZt(build_allocator, src, opts.error_report);
+            const zt_src = try _translateToZt(build_allocator, src, opts.error_report, ESCAPE_BY_DEFAULT);
 
             const template_arena = self.arena.allocator();
 
@@ -110,7 +112,7 @@ pub fn Template(comptime App: type) type {
 
         pub fn translateToZt(self: *Self, src: []const u8, error_report: ?*CompileErrorReport) !ZtSource {
             var arena = ArenaAllocator.init(self.allocator);
-            const zt_src = try _translateToZt(arena.allocator(), src, error_report);
+            const zt_src = try _translateToZt(arena.allocator(), src, error_report, ESCAPE_BY_DEFAULT);
 
             return .{
                 .src = zt_src,
@@ -179,7 +181,7 @@ pub fn Template(comptime App: type) type {
 }
 
 // allocator is an arena
-fn _translateToZt(allocator: Allocator, src: []const u8, error_report: ?*CompileErrorReport) ![]const u8 {
+fn _translateToZt(allocator: Allocator, src: []const u8, error_report: ?*CompileErrorReport, comptime escape_by_default: bool) ![]const u8 {
     if (src.len == 0) {
         return "return null;";
     }
@@ -252,13 +254,20 @@ fn _translateToZt(allocator: Allocator, src: []const u8, error_report: ?*Compile
         if (next == '=') {
             pos += 1; // skip the =
 
-            var elz_set_exp: []const u8 = "\n$";
+            var elz_set_exp: []const u8 = if (comptime escape_by_default) "\n$$" else "\n$";
 
             var expression = std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace);
             if (expression.len > 0) {
-                if (std.mem.startsWith(u8, expression, "escape ")) {
-                    elz_set_exp = "\n$$";
-                    expression = expression["escape ".len..];
+                if (comptime escape_by_default) {
+                    if (std.mem.startsWith(u8, expression, "safe ")) {
+                        elz_set_exp = "\n$";
+                        expression = expression["safe ".len..];
+                    }
+                } else {
+                    if (std.mem.startsWith(u8, expression, "escape ")) {
+                        elz_set_exp = "\n$$";
+                        expression = expression["escape ".len..];
+                    }
                 }
                 try buf.ensureUnusedCapacity(elz_set_exp.len + expression.len + 2);
                 buf.appendSliceAssumeCapacity(elz_set_exp);
@@ -425,7 +434,21 @@ test "Template: space stripping" {
 test "Template: escaping" {
     try testTemplate("<h1>hello</h1>", "<%= @name %>", .{ .name = "<h1>hello</h1>" });
     try testTemplate("&lt;h1&gt;hello&lt;/h1&gt;", "<%= escape @name %>", .{ .name = "<h1>hello</h1>" });
+
+    try testTemplateWithApp(struct {
+        pub const ZtlConfig = struct {
+            pub const escape_by_default: bool = true;
+        };
+    }, "&lt;h1&gt;hello&lt;/h1&gt;", "<%= @name %>", .{ .name = "<h1>hello</h1>" });
+
+    try testTemplateWithApp(struct {
+        pub const ZtlConfig = struct {
+            pub const escape_by_default: bool = true;
+        };
+    }, "<h1>hello</h1>", "<%= safe @name %>", .{ .name = "<h1>hello</h1>" });
 }
+
+
 
 test "Template: local and global" {
     try testTemplate("12",
@@ -507,7 +530,11 @@ test "Template: map global" {
 }
 
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
-    var tmpl = Template(void).init(t.allocator, {});
+    return testTemplateWithApp(void, expected, template, args);
+}
+
+fn testTemplateWithApp(comptime App: type, expected: []const u8, template: []const u8, args: anytype) !void {
+    var tmpl = Template(App).init(t.allocator, App{});
     defer tmpl.deinit();
 
     var error_report = CompileErrorReport{};
