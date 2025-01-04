@@ -45,6 +45,7 @@ pub fn Functions(comptime A: type) type {
 }
 
 const t = @import("t.zig");
+const Token = @import("scanner.zig").Token;
 
 test {
     std.testing.refAllDecls(@This());
@@ -58,39 +59,27 @@ test "tests:afterEach" {
 }
 
 test "ztl: local limit" {
-    blk: {
-        var c = Compiler(struct {
-            pub const ZtlConfig = struct {
-                pub const max_locals = 3;
-            };
-        }).init(t.arena.allocator()) catch unreachable;
+    defer t.reset();
 
-        var error_report = CompileErrorReport{};
-        c.compile(
-            \\ var a = 1;
-            \\ var b = 1;
-            \\ var c = 1;
-            \\ var d = 1;
-        , .{.error_report = &error_report}) catch {
-            try t.expectString("Maximum number of local variable (3) exceeded", error_report.message);
-            break :blk;
+    const App = struct {
+        pub const ZtlConfig = struct {
+            pub const max_locals = 3;
         };
-        return error.NoError;
-    }
+    };
 
-    {
-        var c = Compiler(struct {
-            pub const ZtlConfig = struct {
-                pub const max_locals = 3;
-            };
-        }).init(t.arena.allocator()) catch unreachable;
+    try testErrorWithApp(App, "Maximum number of local variable (3) exceeded",
+        \\ var a = 1;
+        \\ var b = 1;
+        \\ var c = 1;
+        \\ var d = 1;
+    );
 
-        try c.compile(
-            \\ var a = 1;
-            \\ var b = 1;
-            \\ var c = 1;
-        , .{});
-    }
+    try testReturnValueWithApp(App, .{}, .{ .i64 = 11 },
+        \\ var a = 1;
+        \\ var b = 1;
+        \\ var c = 1;
+        \\ return 11;
+    );
 }
 
 test "ztl: arithmetic" {
@@ -1681,9 +1670,11 @@ fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, src: []
     const allocator = t.arena.allocator();
 
     const byte_code = blk: {
+        const tokens, const positions = try testCollectTokens(src);
+
         var error_report = CompileErrorReport{};
-        var c = try Compiler(App).init(allocator);
-        c.compile(src, .{.error_report = &error_report}) catch |err| {
+        var c = try Compiler(App).init(allocator, tokens, positions);
+        c.compile(.{.error_report = &error_report}) catch |err| {
             std.debug.print("Compilation error: {any}\n{}\n", .{err, error_report});
             return err;
         };
@@ -1719,9 +1710,17 @@ fn testError(expected: []const u8, src: []const u8) !void {
 
 fn testErrorWithApp(comptime App: type, expected: []const u8, src: []const u8) !void {
     var error_report = CompileErrorReport{};
-    var c = Compiler(App).init(t.arena.allocator()) catch unreachable;
 
-    c.compile(src, .{.error_report = &error_report}) catch {
+    const tokens, const positions = testCollectTokens(src) catch |err| {
+        if (std.mem.eql(u8, expected, @errorName(err))) {
+            return;
+        }
+        return err;
+    };
+
+    var c = Compiler(App).init(t.arena.allocator(), tokens, positions) catch unreachable;
+
+    c.compile(.{.error_report = &error_report}) catch {
         if (std.mem.indexOf(u8, error_report.message, expected) == null) {
             std.debug.print("Wrong error\nexpected: '{s}'\nactual:   '{s}'\n", .{ expected, error_report.message });
             return error.WrongError;
@@ -1734,8 +1733,10 @@ fn testErrorWithApp(comptime App: type, expected: []const u8, src: []const u8) !
 
 fn testRuntimeError(expected: []const u8, src: []const u8) !void {
     var error_report = CompileErrorReport{};
-    var c = try Compiler(void).init(t.arena.allocator());
-    c.compile(src, .{.error_report = &error_report}) catch |err| {
+
+    const tokens, const positions = try testCollectTokens(src);
+    var c = try Compiler(void).init(t.arena.allocator(), tokens, positions);
+    c.compile(.{.error_report = &error_report}) catch |err| {
         std.debug.print("Compilation error: {any}\n{}\n", .{err, error_report});
         return err;
     };
@@ -1766,4 +1767,22 @@ fn checkVMForLeaks(vm: anytype) !void {
     }
     std.debug.print("ref pool leak: {d}\n", .{vm._ref_pool.count});
     return error.MemoryLeak;
+}
+
+fn testCollectTokens(src: []const u8) !struct{[]const Token, []const u32} {
+    const Scanner = @import("scanner.zig").Scanner;
+
+    const allocator = t.arena.allocator();
+    var scanner = Scanner.init(allocator, src);
+    var tokens: std.ArrayListUnmanaged(Token) = .{};
+    var positions: std.ArrayListUnmanaged(u32) = .{};
+    while (true) {
+        try positions.append(allocator, scanner.skipSpace());
+        const token = try scanner.next();
+        try tokens.append(allocator, token);
+        if (token == .EOF) {
+            break;
+        }
+    }
+    return .{tokens.items, positions.items};
 }
