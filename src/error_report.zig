@@ -3,7 +3,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const Compile = struct {
-    pos: u32 = 0,
+    end: u32 = 0,
+    start: u32 = 0,
     src: []const u8 = "",
     err: ?anyerror = null,
     message: []const u8 = "",
@@ -11,10 +12,6 @@ pub const Compile = struct {
     pub fn format(self: *const Compile, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         if (self.err) |se| {
             try writer.writeAll(@errorName(se));
-            try writer.writeAll(" - ");
-        }
-        if (self.message.len > 0) {
-            try writer.writeAll(self.message);
             try writer.writeAll(" - ");
         }
 
@@ -25,9 +22,7 @@ pub const Compile = struct {
         try writer.writeByte('\n');
 
         const c = self.column();
-        if (c > 0) {
-            try writer.writeBytesNTimes("-", c - 1);
-        }
+        try writer.writeBytesNTimes("-", c - 1);
         try writer.writeAll("^");
         try writer.writeAll(self.contextAfter(1));
     }
@@ -40,22 +35,22 @@ pub const Compile = struct {
     }
 
     pub fn lineStart(self: *const Compile) usize {
-        if (std.mem.lastIndexOfScalar(u8, self.src[0..self.pos], '\n')) |n| {
+        if (std.mem.lastIndexOfScalar(u8, self.src[0..self.start], '\n')) |n| {
             return n + 1;
         }
         return 0;
     }
 
     pub fn lineEnd(self: *const Compile) usize {
-        return std.mem.indexOfScalarPos(u8, self.src, self.pos, '\n') orelse self.src.len;
+        return std.mem.indexOfScalarPos(u8, self.src, self.end, '\n') orelse self.src.len;
     }
 
     pub fn lineNumber(self: *const Compile) usize {
-        return std.mem.count(u8, self.src[0..self.pos], "\n") + 1;
+        return std.mem.count(u8, self.src[0..self.start], "\n") + 1;
     }
 
     pub fn column(self: *const Compile) usize {
-        return self.pos - self.lineStart();
+        return self.end - self.lineStart();
     }
 
     pub fn contextBefore(self: *const Compile, line_count: usize) []const u8 {

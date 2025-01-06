@@ -23,27 +23,11 @@ pub const Scanner = struct {
         };
     }
 
+
     pub fn reset(self: *Scanner, src: []const u8) void {
         self.src = src;
         self.pos = 0;
         self.scratch.clearRetainingCapacity();
-    }
-
-    // Used by our caller to figure out the position of the next token
-    // might as well use this opportunity to skip the whitespace with respect
-    // to our self.pos;
-    pub fn skipSpace(self: *Scanner) u32 {
-        var pos = self.pos;
-        const src = self.src;
-
-        while (pos < src.len) {
-            switch (src[pos]) {
-                ' ', '\t', '\r', '\n' => pos += 1,
-                else => break,
-            }
-        }
-        self.pos = pos;
-        return pos;
     }
 
     pub fn next(self: *Scanner) Error!Token {
@@ -343,7 +327,6 @@ pub const Token = union(enum) {
     AND,
     BANG,
     BANG_EQUAL,
-    BOF,
     BOOLEAN: bool,
     BREAK,
     COLON,
@@ -390,6 +373,7 @@ pub const Token = union(enum) {
     SEMICOLON,
     SLASH,
     STAR,
+    START,
     STRING: []const u8,
     VAR,
     WHILE,
@@ -400,7 +384,6 @@ pub const Token = union(enum) {
             .AND => return writer.writeAll("and"),
             .BANG => return writer.writeAll("!"),
             .BANG_EQUAL => return writer.writeAll("!="),
-            .BOF => return writer.writeAll("<bof>"),
             .BOOLEAN => |v| try std.fmt.format(writer, "boolean '{any}'", .{v}),
             .BREAK => return writer.writeAll("break"),
             .COLON => return writer.writeAll("colon"),
@@ -447,6 +430,7 @@ pub const Token = union(enum) {
             .SEMICOLON => return writer.writeAll(";"),
             .SLASH => return writer.writeAll("\\"),
             .STAR => return writer.writeAll("*"),
+            .START => return writer.writeAll("<ztl_start>"),
             .STRING => |v| try std.fmt.format(writer, "string '{s}'", .{v}),
             .VAR => return writer.writeAll("var"),
             .WHILE => return writer.writeAll("while"),

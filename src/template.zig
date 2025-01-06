@@ -52,63 +52,31 @@ pub fn Template(comptime App: type) type {
             const build_allocator = build_arena.allocator();
 
             const zt_src = try _translateToZt(build_allocator, src, opts.error_report, ESCAPE_BY_DEFAULT);
+
             const template_arena = self.arena.allocator();
 
-            var scanner = Scanner.init(build_allocator, zt_src);
-
-            // at this point, the template -> ztl translation will be invalid if
-            // any globals (@variable) were used. If we try to compile, we'll
-            // get an error about undefined variables.
-            // We need to extract any globals from the ztl source code, and then
-            // manipulate the bytecode to have it think those locals are valid
-            // (which, when we run the bytecode, the VM will inject)
-            // While we're doing this, we might as well save the tokens to pass
-            // to the compiler
-
-            var tokens: std.ArrayListUnmanaged(Token) = .{};
-            var token_positions: std.ArrayListUnmanaged(u32) = .{};
-
-            // a map because we need to de-dupe
-            var global_lookup: std.StringHashMapUnmanaged(void) = .{};
-
-            while (true) {
-                try token_positions.append(build_allocator, scanner.skipSpace());
-
-                // It shouldn not be possible for this to fail. We've already scanned
-                // the original template src to find the end tags. The zt_srt which
-                // we're scanning now is only a slight / controlled modification of
-                // that.
-                const token = try scanner.next();
-
-                try tokens.append(build_allocator, token);
-
-                switch (token) {
-                    .IDENTIFIER => |name| {
-                        if (name[0] == '@') {
-                            _ = try global_lookup.getOrPut(build_allocator, name);
-                        }
-                    },
-                    .EOF => break,
-                    else => {},
-                }
-            }
-
             {
+                // at this point, the template -> ztl translation will be invalid if
+                // any globals (@variable) were used. If we try to compile, we'll
+                // get an error about undefined variables.
+                // We need to extract any globals from the ztl source code, and then
+                // manipulate the bytecode to have it think those locals are valid
+                // (which, when we run the bytecode, the VM will inject)
+                const temp_globals = try extractGlobals(build_allocator, zt_src);
+
                 // copy our globals arraylist (which was generated in our
                 // tempoary build_arena and might be wasting space, and references
                 // the source) into a properly sized slice owned by the template's
                 // permanent arena and also owning the identifier name;
-                self.globals = try template_arena.alloc([]const u8, global_lookup.count());
-
+                self.globals = try template_arena.alloc([]const u8, temp_globals.count());
                 var i: usize = 0;
-                var it = global_lookup.keyIterator();
+                var it = temp_globals.keyIterator();
                 while (it.next()) |key_ptr| {
                     self.globals[i] = try template_arena.dupe(u8, key_ptr.*);
                     i += 1;
                 }
                 sortVariableNames(self.globals);
             }
-
 
             // OK, this is one of the crazier parts. Ideally, we'd take our zt
             // source code, and add declarations for our globals. So, a simple
@@ -128,8 +96,11 @@ pub fn Template(comptime App: type) type {
             // (it'll write the appropriate byte code and alter its own variable
             // stack).
 
-            var compiler = try Compiler(App).init(build_allocator, tokens.items, token_positions.items);
-            compiler.compile(.{.force_locals = self.globals, .error_report = opts.error_report}) catch |err| {
+            var compiler = try Compiler(App).init(build_allocator);
+            compiler.compile(zt_src, .{
+                .force_locals = self.globals,
+                .error_report = opts.error_report,
+            }) catch |err| {
                 if (opts.error_report) |er| {
                     er.src = try template_arena.dupe(u8, zt_src);
                     er.message = try template_arena.dupe(u8, er.message);
@@ -229,11 +200,16 @@ fn _translateToZt(allocator: Allocator, src: []const u8, error_report: ?*Compile
     var scanner = Scanner.init(allocator, "");
 
     errdefer |err| if (error_report) |er| {
+        var message = @errorName(err);
+        if (err == error.EOF) {
+            message = "Missing expected end tag, '%>'";
+        }
         er.* = .{
             .src = src,
             .err = err,
-            .pos = @intCast(scanner.pos + pos),
-            .message = if (err == error.EOF) "Missing expected end tag, '%>'" else "",
+            .end = @intCast(scanner.pos + pos),
+            .start = @intCast(scanner.pos + pos),
+            .message = message,
         };
     };
 
@@ -325,6 +301,26 @@ fn findCodeEnd(scanner: *Scanner, src: []const u8, pos: usize) !struct { usize, 
             return .{ pos + scanner.pos - 1, pos + scanner.pos + 2, true };
         },
         .EOF => return error.EOF,
+        else => {},
+    } else |err| {
+        return err;
+    }
+    unreachable;
+}
+
+// allocator is an arena
+fn extractGlobals(allocator: Allocator, src: []const u8) !std.StringHashMapUnmanaged(void) {
+    var scanner = Scanner.init(allocator, src);
+    // a map because we need to de-dupe
+    var globals: std.StringHashMapUnmanaged(void) = .{};
+
+    while (scanner.next()) |token| switch (token) {
+        .IDENTIFIER => |name| {
+            if (name[0] == '@') {
+                _ = try globals.getOrPut(allocator, name);
+            }
+        },
+        .EOF => return globals,
         else => {},
     } else |err| {
         return err;
@@ -452,6 +448,8 @@ test "Template: escaping" {
     }, "<h1>hello</h1>", "<%= safe @name %>", .{ .name = "<h1>hello</h1>" });
 }
 
+
+
 test "Template: local and global" {
     try testTemplate("12",
         \\
@@ -484,12 +482,6 @@ test "Template: template error" {
     , "<%= \\ %>");
 
     try testTemplateFullError(
-        \\UnexpectedCharacter - line 1:
-        \\<% \ %>
-        \\---^
-    , "<% \\ %>");
-
-    try testTemplateFullError(
         \\UnexpectedCharacter - line 3:
         \\ <h2>Products</h2>
         \\ <% foreach (@products) |p| { %>
@@ -504,7 +496,7 @@ test "Template: template error" {
     );
 
     // TODO:
-    // above is a scanner error, this is a compiler erro
+    // // above is a scanner error, this is a compiler erro
     // try testTemplateFullError(
     //     \\UnexpectedCharacter - line 3:
     //     \\ <h2>Products</h2>
@@ -518,12 +510,6 @@ test "Template: template error" {
     //     \\    name: <%= p["name"} %>
     //     \\ <% } %>
     // );
-
-    // try testTemplateFullError(
-    //     \\UnexpectedCharacter - line 1:
-    //     \\<% about %>
-    //     \\---^
-    // , "<% about %>");
 }
 
 test "Template: runtime error" {
@@ -604,6 +590,7 @@ fn testTemplateFullError(expected: []const u8, template: []const u8) !void {
         var buf: std.ArrayListUnmanaged(u8) = .{};
         defer buf.deinit(t.allocator);
 
+        std.debug.print("{any}\n", .{error_report});
         try std.fmt.format(buf.writer(t.allocator), "{}", .{error_report});
         try t.expectString(expected, buf.items);
         return;

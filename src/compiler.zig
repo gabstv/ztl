@@ -57,17 +57,15 @@ pub fn Compiler(comptime A: type) type {
         // Their main goal is for generating errors.
         arena: Allocator,
 
-        // the index of the current token
-        index: usize,
-        tokens: []const Token,
-        // the position of each token
-        positions: []const u32,
+        // will be set when compile() is called
+        scanner: Scanner = undefined,
 
         // we just need to keep track of our current token and the
         // previous token to successfully parsed.
         current: Token,
         previous: Token,
-        statement_start: u32,
+        current_start: u32,
+        current_end: u32,
 
         functions: std.StringHashMapUnmanaged(Function),
         function_calls: std.ArrayListUnmanaged(Function.Call),
@@ -88,7 +86,7 @@ pub fn Compiler(comptime A: type) type {
         const Self = @This();
 
         // we expect allocator to be an arena
-        pub fn init(allocator: Allocator, tokens: []const Token, positions: []const u32) !Self {
+        pub fn init(allocator: Allocator) !Self {
             return .{
                 .err = null,
                 .scopes = .{},
@@ -97,29 +95,29 @@ pub fn Compiler(comptime A: type) type {
                 .arena = allocator,
                 .function_calls = .{},
                 .string_literals = .{},
-                .index = 0,
-                .tokens = tokens,
-                .positions = positions,
                 .jumper = Jumper(App).init(allocator),
                 .writer = try ByteCode(App).init(allocator),
-                .statement_start = 0,
-                .current = .{ .BOF = {} },
-                .previous = .{ .BOF = {} },
+                .current_end = 0,
+                .current_start = 0,
+                .current = .{ .START = {} },
+                .previous = .{ .START = {} },
             };
         }
 
-        pub fn compile(self: *Self, opts: CompileOpts) CompilerError!void {
+        pub fn compile(self: *Self, src: []const u8, opts: CompileOpts) CompilerError!void {
             errdefer |err| if (opts.error_report) |er| {
-                std.debug.print("ERR: {d}\n", .{self.statement_start});
                 er.* = .{
-                    .src = "", // will be set by our caller
+                    .src = src,
                     .err = err,
-                    .pos = self.statement_start,
+                    .end = self.current_end,
+                    .start = self.current_start,
                     .message = self.err orelse @errorName(err),
                 };
             };
 
-            self.advance();
+            self.scanner = Scanner.init(self.arena, src);
+            try self.advance();
+
             self.writer.beginScript();
             try self.beginScope(false);
 
@@ -131,7 +129,7 @@ pub fn Compiler(comptime A: type) type {
                 });
             }
 
-            while (self.current != .EOF) {
+            while (try self.match(.EOF) == false) {
                 try self.declaration();
             }
 
@@ -152,12 +150,13 @@ pub fn Compiler(comptime A: type) type {
             }
         }
 
-        fn advance(self: *Self) void {
+        fn advance(self: *Self) !void {
             self.previous = self.current;
 
-            const index = self.index;
-            self.current = self.tokens[index];
-            self.index = index + 1;
+            var scanner = &self.scanner;
+            self.current_start = scanner.pos;
+            self.current = try scanner.next();
+            self.current_end = scanner.pos;
         }
 
         fn consumeSemicolon(self: *Self) !void {
@@ -174,22 +173,20 @@ pub fn Compiler(comptime A: type) type {
 
         fn match(self: *Self, expected: std.meta.Tag(Token)) !bool {
             if (@intFromEnum(self.current) == @intFromEnum(expected)) {
-                self.advance();
+                try self.advance();
                 return true;
             }
             return false;
         }
 
         fn declaration(self: *Self) CompilerError!void {
-            // -1, because, at this point, index is at +1
-            self.statement_start = self.positions[self.index - 1];
             switch (self.current) {
                 .VAR => {
-                    self.advance();
+                    try self.advance();
                     return self.variableInitialization();
                 },
                 .FN => {
-                    self.advance();
+                    try self.advance();
                     const bc = &self.writer;
 
                     if (try self.match(.PRINT)) {
@@ -315,13 +312,13 @@ pub fn Compiler(comptime A: type) type {
             var jumper = &self.jumper;
             switch (self.current) {
                 .LEFT_BRACE => {
-                    self.advance();
+                    try self.advance();
                     try self.beginScope(true);
                     try self.block();
                     try self.endScope(false);
                 },
                 .DOLLAR => {
-                    self.advance();
+                    try self.advance();
                     const op =  if (try self.match(.DOLLAR)) OpCode.OUTPUT_ESCAPE else OpCode.OUTPUT;
                     try self.expression();
                     try self.consume(.SEMICOLON, "semicolon (';')");
@@ -329,7 +326,7 @@ pub fn Compiler(comptime A: type) type {
 
                 },
                 .IF => {
-                    self.advance();
+                    try self.advance();
                     try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
                     try self.expression();
                     try self.consume(.RIGHT_PARENTHESIS, "closing parenthesis (')')");
@@ -348,7 +345,7 @@ pub fn Compiler(comptime A: type) type {
                     }
                 },
                 .FOR => {
-                    self.advance();
+                    try self.advance();
                     try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
 
                     // initializer variable needs its own scope
@@ -417,7 +414,7 @@ pub fn Compiler(comptime A: type) type {
                     try self.endScope(false);
                 },
                 .FOREACH => {
-                    self.advance();
+                    try self.advance();
                     try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
 
                     // iterators need their own scope
@@ -514,7 +511,7 @@ pub fn Compiler(comptime A: type) type {
                     try self.endScope(false);
                 },
                 .WHILE => {
-                    self.advance();
+                    try self.advance();
                     const jump_loop_top = jumper.backward(self); // at the end of each iteration, we want to jump back here
 
                     try self.consume(.LEFT_PARENTHESIS, "opening parenthesis ('(')");
@@ -534,7 +531,7 @@ pub fn Compiler(comptime A: type) type {
                     try breakable_scope.breakHere();
                 },
                 .RETURN => {
-                    self.advance();
+                    try self.advance();
                     if (try self.match(.SEMICOLON)) {
                         try bc.op(.RETURN);
                     } else {
@@ -545,7 +542,7 @@ pub fn Compiler(comptime A: type) type {
                     scope.has_return = true;
                 },
                 .BREAK => {
-                    self.advance();
+                    try self.advance();
                     var break_count: usize = 1;
                     if (try self.match(.INTEGER)) {
                         const value = self.previous.INTEGER;
@@ -559,7 +556,7 @@ pub fn Compiler(comptime A: type) type {
                     try self.jumper.insertBreak(self, break_count);
                 },
                 .CONTINUE => {
-                    self.advance();
+                    try self.advance();
                     var continue_count: usize = 1;
                     if (try self.match(.INTEGER)) {
                         const value = self.previous.INTEGER;
@@ -573,7 +570,7 @@ pub fn Compiler(comptime A: type) type {
                     try self.jumper.insertContinue(self, continue_count);
                 },
                 .PRINT => {
-                    self.advance();
+                    try self.advance();
                     try self.consume(.LEFT_PARENTHESIS, "left parenthesis ('(')");
                     const arity = try self.parameterList(32);
                     try self.consumeSemicolon();
@@ -605,7 +602,7 @@ pub fn Compiler(comptime A: type) type {
         }
 
         fn parsePrecedence(self: *Self, precedence: Precedence) CompilerError!void {
-            self.advance();
+            try self.advance();
             const can_assign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
             {
                 const rule = ParseRule(Self).get(self.previous);
@@ -623,7 +620,7 @@ pub fn Compiler(comptime A: type) type {
                 if (nprec > rule.precedence) {
                     break;
                 }
-                self.advance();
+                try self.advance();
                 try rule.infix.?(self, can_assign);
             }
         }
@@ -731,11 +728,11 @@ pub fn Compiler(comptime A: type) type {
                     switch (self.current) {
                         .INTEGER => |n| switch (n) {
                             -1 => {
-                                self.advance();
+                                try self.advance();
                                 return bc.incr(@intCast(idx), 0);
                             },
                             1...10 => {
-                                self.advance();
+                                try self.advance();
                                 return bc.incr(@intCast(idx), @intCast(n));
                             },
                             else => {},
@@ -754,7 +751,7 @@ pub fn Compiler(comptime A: type) type {
                     switch (self.current) {
                         .INTEGER => |n| switch (n) {
                             1 => {
-                                self.advance();
+                                try self.advance();
                                 return bc.incr(@intCast(idx), 0);
                             },
                             else => {},
@@ -812,7 +809,7 @@ pub fn Compiler(comptime A: type) type {
 
                         },
                     }
-                    self.advance();
+                    try self.advance();
                     try self.consume(.COLON, "key : value separator (':')");
                     try self.expression();
                     if (try self.match(.RIGHT_BRACE)) {
@@ -827,7 +824,7 @@ pub fn Compiler(comptime A: type) type {
             try self.writer.initializeMap(entry_count);
         }
 
-        fn arrayIndex(self: *Self, can_assign: bool) CompilerError!void {
+        fn index(self: *Self, can_assign: bool) CompilerError!void {
             try self.expression();
             try self.consume(.RIGHT_BRACKET, "left bracket (']')");
 
@@ -865,7 +862,7 @@ pub fn Compiler(comptime A: type) type {
         fn call(self: *Self) CompilerError!void {
             const name = self.previous.IDENTIFIER;
 
-            self.advance(); // consume '(
+            try self.advance(); // consume '(
 
             const arity = try self.parameterList(255);
             if (CustomFunctionLookup.get(name)) |cf| {
@@ -1459,7 +1456,7 @@ fn ParseRule(comptime C: type) type {
             .{ Token.IF, null, null, Precedence.NONE },
             .{ Token.INTEGER, null, C.number, Precedence.NONE },
             .{ Token.LEFT_BRACE, null, null, Precedence.NONE },
-            .{ Token.LEFT_BRACKET, C.arrayIndex, C.array, Precedence.CALL },
+            .{ Token.LEFT_BRACKET, C.index, C.array, Precedence.CALL },
             .{ Token.LEFT_PARENTHESIS, null, C.grouping, Precedence.NONE },
             .{ Token.LESSER, C.binary, null, Precedence.COMPARISON },
             .{ Token.LESSER_EQUAL, C.binary, null, Precedence.COMPARISON },
