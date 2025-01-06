@@ -4,9 +4,6 @@ const ztl = @import("ztl.zig");
 const Value = ztl.Value;
 
 const VM = @import("vm.zig").VM;
-const config = @import("config.zig");
-const Token = @import("scanner.zig").Token;
-const Scanner = @import("scanner.zig").Scanner;
 const Compiler = @import("compiler.zig").Compiler;
 
 const RenderErrorReport = ztl.RenderErrorReport;
@@ -16,12 +13,7 @@ const Allocator = std.mem.Allocator;
 const MemoryPool = std.heap.MemoryPool;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-// There's a long comment at the end of this file which tries to explain
-// what's going on.
-
 pub fn Template(comptime App: type) type {
-    const ESCAPE_BY_DEFAULT = config.extract(App, "escape_by_default");
-
     return struct {
         app: App,
         allocator: Allocator,
@@ -49,75 +41,28 @@ pub fn Template(comptime App: type) type {
             var build_arena = ArenaAllocator.init(self.allocator);
             defer build_arena.deinit();
 
+            const template_arena = self.arena.allocator();
             const build_allocator = build_arena.allocator();
 
-            const zt_src = try _translateToZt(build_allocator, src, opts.error_report, ESCAPE_BY_DEFAULT);
-
-            const template_arena = self.arena.allocator();
-
-            {
-                // at this point, the template -> ztl translation will be invalid if
-                // any globals (@variable) were used. If we try to compile, we'll
-                // get an error about undefined variables.
-                // We need to extract any globals from the ztl source code, and then
-                // manipulate the bytecode to have it think those locals are valid
-                // (which, when we run the bytecode, the VM will inject)
-                const temp_globals = try extractGlobals(build_allocator, zt_src);
-
-                // copy our globals arraylist (which was generated in our
-                // tempoary build_arena and might be wasting space, and references
-                // the source) into a properly sized slice owned by the template's
-                // permanent arena and also owning the identifier name;
-                self.globals = try template_arena.alloc([]const u8, temp_globals.count());
-                var i: usize = 0;
-                var it = temp_globals.keyIterator();
-                while (it.next()) |key_ptr| {
-                    self.globals[i] = try template_arena.dupe(u8, key_ptr.*);
-                    i += 1;
-                }
-                sortVariableNames(self.globals);
-            }
-
-            // OK, this is one of the crazier parts. Ideally, we'd take our zt
-            // source code, and add declarations for our globals. So, a simple
-            // template like:
-            //    <%= @name %>
-
-            // would have an ztl like:;
-            //    $ @name;
-            //
-            // And now we'd want to do:
-            //
-            //    var @name = null;  // PREPEND THIS
-            //    $ @name;
-            //
-            // But prepending is expensive. So our compiler has a special
-            // definedLocal function which will simulate having those declaration
-            // (it'll write the appropriate byte code and alter its own variable
-            // stack).
-
             var compiler = try Compiler(App).init(build_allocator);
-            compiler.compile(zt_src, .{
-                .force_locals = self.globals,
-                .error_report = opts.error_report,
-            }) catch |err| {
+            compiler.compile(src, .{.error_report = opts.error_report}) catch |err| {
                 if (opts.error_report) |er| {
-                    er.src = try template_arena.dupe(u8, zt_src);
                     er.message = try template_arena.dupe(u8, er.message);
                 }
                 return err;
             };
+
             self.byte_code = try compiler.writer.toBytes(template_arena);
-        }
 
-        pub fn translateToZt(self: *Self, src: []const u8, error_report: ?*CompileErrorReport) !ZtSource {
-            var arena = ArenaAllocator.init(self.allocator);
-            const zt_src = try _translateToZt(arena.allocator(), src, error_report, ESCAPE_BY_DEFAULT);
-
-            return .{
-                .src = zt_src,
-                .arena = arena,
-            };
+            {
+                const globals = compiler.globals;
+                self.globals = try template_arena.alloc([]const u8, globals.count());
+                var it = globals.iterator();
+                while (it.next()) |kv| {
+                    // slice the leading '@'
+                    self.globals[kv.value_ptr.*] = try template_arena.dupe(u8, kv.key_ptr.*[1..]);
+                }
+            }
         }
 
         pub fn render(self: *Self, writer: anytype, globals: anytype, opts: RenderOpts) !void {
@@ -126,36 +71,25 @@ pub fn Template(comptime App: type) type {
             defer arena.deinit();
 
             var vm = VM(App).init(arena.allocator(), self.app);
+            try vm.prepareForGlobals(self.globals.len);
 
             const T = @TypeOf(globals);
             if (T == []Global) {
-                std.mem.sort(Global, globals, {}, struct {
-                    fn lessThan(_: void, lhs: Global, rhs: Global) bool {
-                        return std.mem.order(u8, lhs.@"0", rhs.@"0") == .lt;
-                    }
-                }.lessThan);
-
                 for (globals) |g| {
-                    try vm.injectLocal(g.@"1");
+                    if (self.getIndex(g.@"0")) |index| {
+                        vm.injectGlobal(g.@"1", index);
+                    }
                 }
             } else switch (@typeInfo(T)) {
-                .@"struct" => |s| {
-                    const field_names = comptime blk: {
-                        var field_names: [s.fields.len][]const u8 = undefined;
-                        for (s.fields, 0..) |f, i| {
-                            field_names[i] = f.name;
+                .@"struct" => |s| inline for (s.fields) |f| {
+                    const value = vm.createValue(@field(globals, f.name)) catch {
+                        if (opts.error_report) |er| {
+                            er.message = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(globals, f.name)));
                         }
-                        sortVariableNames(&field_names);
-                        break :blk field_names;
+                        return error.InvalidArgument;
                     };
-                    inline for (field_names) |name| {
-                        const value = vm.createValue(@field(globals, name)) catch {
-                            if (opts.error_report) |er| {
-                                er.message = "Unsupported argument type: " ++ @typeName(@TypeOf(@field(globals, name)));
-                            }
-                            return error.InvalidArgument;
-                        };
-                        try vm.injectLocal(value);
+                    if (self.getIndex(f.name)) |index| {
+                        vm.injectGlobal(value, index);
                     }
                 },
                 else => @compileError("globals must be a struct or an []ztl.Global, got: " ++ @typeName(T)),
@@ -177,155 +111,16 @@ pub fn Template(comptime App: type) type {
         pub fn disassemble(self: *const Self, writer: anytype) !void {
             return @import("byte_code.zig").disassemble(App, self.arena.child_allocator, self.byte_code, writer);
         }
-    };
-}
 
-// allocator is an arena
-fn _translateToZt(allocator: Allocator, src: []const u8, error_report: ?*CompileErrorReport, comptime escape_by_default: bool) ![]const u8 {
-    if (src.len == 0) {
-        return "return null;";
-    }
-
-    var buf = std.ArrayList(u8).init(allocator);
-    try buf.ensureTotalCapacity(src.len + 64);
-
-    const end = src.len - 1;
-
-    var start: usize = 0;
-
-    // If the first character is '%', it isn't a tag. Doing this check here
-    // means we don't have to check if `i == 0` inside our loop.
-    var pos: usize = if (src[0] == '%') 1 else 0;
-
-    var scanner = Scanner.init(allocator, "");
-
-    errdefer |err| if (error_report) |er| {
-        var message = @errorName(err);
-        if (err == error.EOF) {
-            message = "Missing expected end tag, '%>'";
-        }
-        er.* = .{
-            .src = src,
-            .err = err,
-            .end = @intCast(scanner.pos + pos),
-            .start = @intCast(scanner.pos + pos),
-            .message = message,
-        };
-    };
-
-    var trim_left = false;
-    while (true) {
-        const idx = std.mem.indexOfScalarPos(u8, src, pos, '%') orelse end;
-        if (idx == end) {
-            try appendOut(&buf, src[start..], trim_left);
-            break;
-        }
-
-        if (src[idx - 1] != '<') {
-            pos = idx + 1;
-            continue;
-        }
-
-        var next = src[idx + 1];
-        if (next == '%') {
-            // <%%  => '<%'
-            try appendOut(&buf, src[start..idx], false);
-            pos = idx + 1;
-            start = pos;
-            continue;
-        }
-
-        // A literal. We can't append this to buf just yet, since the
-        // following template tag might ask us to strip white spaces.
-        var literal = src[start .. idx - 1];
-        // skip the %
-        pos = idx + 1;
-
-        if (next == '-' and pos != end) {
-            pos += 1;
-            next = src[pos];
-            literal = std.mem.trimRight(u8, literal, &std.ascii.whitespace);
-        }
-
-        try appendOut(&buf, literal, trim_left);
-
-        // find the position of the closing tag, %>
-        const code_end, const tag_end, trim_left = try findCodeEnd(&scanner, src, pos);
-        if (next == '=') {
-            pos += 1; // skip the =
-
-            var elz_set_exp: []const u8 = if (comptime escape_by_default) "\n$$" else "\n$";
-
-            var expression = std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace);
-            if (expression.len > 0) {
-                if (comptime escape_by_default) {
-                    if (std.mem.startsWith(u8, expression, "safe ")) {
-                        elz_set_exp = "\n$";
-                        expression = expression["safe ".len..];
-                    }
-                } else {
-                    if (std.mem.startsWith(u8, expression, "escape ")) {
-                        elz_set_exp = "\n$$";
-                        expression = expression["escape ".len..];
-                    }
-                }
-                try buf.ensureUnusedCapacity(elz_set_exp.len + expression.len + 2);
-                buf.appendSliceAssumeCapacity(elz_set_exp);
-                buf.appendSliceAssumeCapacity(expression);
-                if (expression[expression.len - 1] != ';') {
-                    buf.appendSliceAssumeCapacity(";");
+        fn getIndex(self: *const Self, needle: []const u8) ?usize {
+            for (self.globals, 0..) |g, i| {
+                if (std.mem.eql(u8, g, needle)) {
+                    return i;
                 }
             }
-        } else {
-            try buf.append('\n');
-            try buf.appendSlice(std.mem.trim(u8, src[pos..code_end], &std.ascii.whitespace));
+            return null;
         }
-
-        pos = tag_end; // skip the closing %> or -%>
-        start = pos;
-    }
-    try buf.appendSlice("\nreturn null;");
-    return buf.items;
-}
-
-fn findCodeEnd(scanner: *Scanner, src: []const u8, pos: usize) !struct { usize, usize, bool } {
-    scanner.reset(src[pos..]);
-    while (scanner.next()) |token| switch (token) {
-        .PERCENT => {
-            switch ((try scanner.next())) {
-                .GREATER => return .{ pos + scanner.pos - 2, pos + scanner.pos, false },
-                else => {},
-            }
-        },
-        .MINUS => if (scanner.peek(&.{ .PERCENT, .GREATER })) {
-            return .{ pos + scanner.pos - 1, pos + scanner.pos + 2, true };
-        },
-        .EOF => return error.EOF,
-        else => {},
-    } else |err| {
-        return err;
-    }
-    unreachable;
-}
-
-// allocator is an arena
-fn extractGlobals(allocator: Allocator, src: []const u8) !std.StringHashMapUnmanaged(void) {
-    var scanner = Scanner.init(allocator, src);
-    // a map because we need to de-dupe
-    var globals: std.StringHashMapUnmanaged(void) = .{};
-
-    while (scanner.next()) |token| switch (token) {
-        .IDENTIFIER => |name| {
-            if (name[0] == '@') {
-                _ = try globals.getOrPut(allocator, name);
-            }
-        },
-        .EOF => return globals,
-        else => {},
-    } else |err| {
-        return err;
-    }
-    unreachable;
+    };
 }
 
 pub const CompilerOpts = struct {
@@ -342,45 +137,6 @@ pub const Global = struct {
     Value,
 };
 
-const ZtSource = struct {
-    src: []const u8,
-    arena: ArenaAllocator,
-
-    pub fn deinit(self: *const ZtSource) void {
-        self.arena.deinit();
-    }
-};
-
-fn appendOut(buf: *std.ArrayList(u8), content: []const u8, trim_left: bool) !void {
-    var literal = content;
-
-    if (trim_left) {
-        literal = std.mem.trimLeft(u8, literal, &std.ascii.whitespace);
-    }
-    if (literal.len == 0) {
-        return;
-    }
-
-    if (std.mem.indexOfScalarPos(u8, literal, 0, '`') == null) {
-        try buf.ensureUnusedCapacity(4 + literal.len);
-        buf.appendSliceAssumeCapacity("$`");
-        buf.appendSliceAssumeCapacity(literal);
-        buf.appendSliceAssumeCapacity("`;");
-    } else {
-        try buf.appendSlice("$\"");
-        try std.zig.stringEscape(literal, "", .{}, buf.writer());
-        try buf.appendSlice("\";");
-    }
-}
-
-fn sortVariableNames(values: [][]const u8) void {
-    std.mem.sort([]const u8, values, {}, struct {
-        fn sort(_: void, lhs: []const u8, rhs: []const u8) bool {
-            return std.mem.order(u8, lhs, rhs) == .lt;
-        }
-    }.sort);
-}
-
 const t = @import("t.zig");
 test "Template: simple" {
     try testTemplate("Simple", "Simple", .{});
@@ -388,6 +144,8 @@ test "Template: simple" {
     try testTemplate("Simple", "<%= `Simple`; %>", .{});
     try testTemplate("Simple", "<%=`Simple`%>", .{});
     try testTemplate("Simple", "<%=`Simple`;%>", .{});
+    try testTemplate("93", "<%= (1+2)  * 31;%>", .{});
+    try testTemplate("  Simple  ", "  <%= `Simple` %>  ", .{});
 }
 
 test "Template: edge cases" {
@@ -448,8 +206,6 @@ test "Template: escaping" {
     }, "<h1>hello</h1>", "<%= safe @name %>", .{ .name = "<h1>hello</h1>" });
 }
 
-
-
 test "Template: local and global" {
     try testTemplate("12",
         \\
@@ -472,17 +228,30 @@ test "Template: for loop" {
     , .{ .products = [_]i64{ 10, 22, 33 } });
 }
 
-test "Template: template error" {
+test "Template: error" {
     try testTemplateError("Missing expected end tag, '%>'", "<%=");
 
     try testTemplateFullError(
-        \\UnexpectedCharacter - line 1:
+        \\UnexpectedCharacter - ('\') - line 1:
         \\<%= \ %>
         \\----^
     , "<%= \\ %>");
 
     try testTemplateFullError(
-        \\UnexpectedCharacter - line 3:
+        \\Invalid - Expected Closing output tag '%>', got integer '999' (INTEGER) - line 1:
+        \\<%= 123 ; 999 %>
+        \\----------^
+    , "<%= 123 ; 999 %>");
+
+    try testTemplateFullError(
+        \\Invalid - Expected Closing output tag '%>', got integer '999' (INTEGER) - line 2:
+        \\hello
+        \\<%= 123 ; 999 %>
+        \\----------^
+    , "hello\n<%= 123 ; 999 %>");
+
+    try testTemplateFullError(
+        \\UnexpectedCharacter - ('\') - line 3:
         \\ <h2>Products</h2>
         \\ <% foreach (@products) |p| { %>
         \\    name: <%= p["name"] \ %>
@@ -495,21 +264,20 @@ test "Template: template error" {
         \\ <% } %>
     );
 
-    // TODO:
-    // // above is a scanner error, this is a compiler erro
-    // try testTemplateFullError(
-    //     \\UnexpectedCharacter - line 3:
-    //     \\ <h2>Products</h2>
-    //     \\ <% foreach (@products) |p| { %>
-    //     \\    name: <%= p["name"} %>
-    //     \\----------------------^
-    //     \\ <% } %>
-    // ,
-    //     \\ <h2>Products</h2>
-    //     \\ <% foreach (@products) |p| { %>
-    //     \\    name: <%= p["name"} %>
-    //     \\ <% } %>
-    // );
+    // above is a scanner error, this is a compiler erro
+    try testTemplateFullError(
+        \\UnexpectedToken - Expected left bracket (']'), got } (RIGHT_BRACE) - line 3:
+        \\ <h2>Products</h2>
+        \\ <% foreach (@products) |p| { %>
+        \\    name: <%= p["name"} %>
+        \\----------------------^
+        \\ <% } %>
+    ,
+        \\ <h2>Products</h2>
+        \\ <% foreach (@products) |p| { %>
+        \\    name: <%= p["name"} %>
+        \\ <% } %>
+    );
 }
 
 test "Template: runtime error" {
@@ -527,6 +295,10 @@ test "Template: map global" {
     globals[0] = .{ "key_2", .{ .i64 = 123 } };
     globals[1] = .{ "a", .{ .string = "hello" } };
     try testTemplate("hello 123", "<%= @a %> <%= @key_2 %>", globals);
+
+    globals[1] = .{ "key_2", .{ .i64 = 123 } };
+    globals[0] = .{ "a", .{ .string = "hello" } };
+    try testTemplate("hello 123", "<%= @a %> <%= @key_2 %>", globals);
 }
 
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
@@ -539,29 +311,14 @@ fn testTemplateWithApp(comptime App: type, expected: []const u8, template: []con
 
     var error_report = CompileErrorReport{};
     tmpl.compile(template, .{.error_report = &error_report}) catch |err| {
-        if (tmpl.translateToZt(template, null)) |zts| {
-            defer zts.deinit();
-            std.debug.print("==zt source:==\n{s}\n", .{zts.src});
-        } else |_| {}
-
         std.debug.print("Compile template error:\n{}\n", .{error_report});
         return err;
     };
     // try tmpl.disassemble(std.io.getStdErr().writer());
 
-    // {
-    //     const zts = tmpl.translateToZt(template) catch unreachable;
-    //     defer zts.deinit();
-    //     std.debug.print("==zt source:==\n{s}\n", .{zts.src});
-    // }
-
     var buf = std.ArrayList(u8).init(t.allocator);
     defer buf.deinit();
     tmpl.render(buf.writer(), args, .{}) catch |err| {
-        const zts = tmpl.translateToZt(template, null) catch unreachable;
-        defer zts.deinit();
-        std.debug.print("==zt source:==\n{s}\n", .{zts.src});
-
         std.debug.print("==disassemble==\n", .{});
         try tmpl.disassemble(std.io.getStdErr().writer());
         return err;
@@ -590,7 +347,6 @@ fn testTemplateFullError(expected: []const u8, template: []const u8) !void {
         var buf: std.ArrayListUnmanaged(u8) = .{};
         defer buf.deinit(t.allocator);
 
-        std.debug.print("{any}\n", .{error_report});
         try std.fmt.format(buf.writer(t.allocator), "{}", .{error_report});
         try t.expectString(expected, buf.items);
         return;
@@ -614,51 +370,3 @@ var report = RenderErrorReport{};
     };
     return error.NoError;
 }
-
-// Surprisingly [to me] this is the dirtiest part of the codebase. Our goal is
-// to take a template, say:
-//
-//    <h2>Products</h2>
-//    <% for (var i = 0; i < @products.len; i++) { %>
-//      <%= @products[i].name %>
-//    <% } %>
-//
-// And to turn it into ztl code that can be compiled and the run. At first glance,
-// we want to create something like:
-//
-//    var html = "";
-//    html += '<h2>Products</h2>';
-//    for (var i = 0; i < @products.len; i++) {
-//        html += @products[i].name;
-//    }
-//    return html;
-//
-// But we have 3 challenges.
-//
-// 1 - It's possible for string literals within the ztl code to conflict with the
-// template syntax. For example, this simple template is problematic:
-//
-//     <%= "hello %> world" %>
-//
-// We need to be zt-aware when we parse the template. You could say the template
-// is a superset of zt. indexOf("%>") isn't going to work. Whenever we enter
-// a code block (whether it's an output block or not), we need to use the zt
-// scanner to find the correct terminating tag.
-//
-// 2 - The above ztl isn't valid: @products is undefined. We could add global
-// variables to zt, but that would be implemented through a hashmap which would
-// be relatively slow compared to a local variable. So, we want to generate
-// code where @products is a local variable:
-//
-//    var @products = null; // ADDED
-//    var html = "";
-//    html += '<h2>Products</h2>';
-//
-// As a pre-compilation step, we need to scan the source and extract all globals.
-// (And then we'll do some shenanigans in the VM to load these pseudo-globals
-// into the VM's stack before running - that behavior is documented in the vm).
-//
-// 3 - While we're going to translate the template to valid zt, we'd like errors
-// to be somewhat meaningful from the point of view of the template. So we need
-// to inject debug information into the ztl source, and both the scanner and
-// compiler need to be aware of these.

@@ -24,6 +24,7 @@ pub fn VM(comptime App: type) type {
         _ref_pool: RefPool,
 
         _stack: Stack = .{},
+        _globals: Stack = .{},
 
         _frames: [MAX_CALL_FRAMES]Frame = undefined,
 
@@ -44,8 +45,12 @@ pub fn VM(comptime App: type) type {
         }
 
         // See template.zig's hack around globals to see why we're doing this
-        pub fn injectLocal(self: *Self, value: Value) !void {
-            return self._stack.append(self._allocator, value);
+        pub fn prepareForGlobals(self: *Self, count: usize) !void {
+            return self._globals.appendNTimes(self._allocator, .{.null = {}}, count);
+        }
+
+        pub fn injectGlobal(self: *Self, value: Value, i: usize) void {
+            self._globals.items[i] = value;
         }
 
         pub fn run(self: *Self, byte_code: []const u8, writer: anytype) !Value {
@@ -91,7 +96,9 @@ pub fn VM(comptime App: type) type {
             var frame_count: usize = 0;
 
             var stack = &self._stack;
+            var globals = &self._globals;
             var frame_pointer: usize = 0;
+
 
             while (true) {
                 const op_code: OpCode = @enumFromInt(ip[0]);
@@ -109,7 +116,7 @@ pub fn VM(comptime App: type) type {
                     },
                     .OUTPUT => {
                         var value = stack.pop();
-                        try value.write(writer,false);
+                        try value.write(writer, false);
                         self.release(value);
                     },
                     .OUTPUT_ESCAPE => {
@@ -142,6 +149,34 @@ pub fn VM(comptime App: type) type {
                     .CONSTANT_NULL => {
                         try stack.append(allocator, .{ .null = {} });
                     },
+                    .GET_GLOBAL => {
+                        const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
+                        const value = globals.items[idx];
+                        self.acquire(value);
+                        // GET_GLOBAL pushes the global onto the stack
+                        try stack.append(allocator, value);
+                        ip += SL;
+                    },
+                    .SET_GLOBAL => {
+                        const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
+                        const current = &globals.items[idx];
+                        self.release(current.*);
+                        // SET_GLOBAL takes the value off the stack
+                        current.* = stack.getLast();
+                        self.acquire(current.*);
+                        ip += SL;
+                    },
+                    .INCR_GLOBAL => {
+                        const incr: i64 = if (ip[0] == 0) -1 else ip[0];
+                        ip += 1;
+
+                        const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
+                        ip += SL;
+
+                        const v = try self.add(globals.items[idx], .{ .i64 = incr });
+                        try stack.append(allocator, v);
+                        globals.items[idx] = v;
+                    },
                     .GET_LOCAL => {
                         const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
                         const value = stack.items[frame_pointer + idx];
@@ -156,6 +191,18 @@ pub fn VM(comptime App: type) type {
                         current.* = stack.getLast();
                         self.acquire(current.*);
                         ip += SL;
+                    },
+                    .INCR_LOCAL => {
+                        const incr: i64 = if (ip[0] == 0) -1 else ip[0];
+                        ip += 1;
+
+                        const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
+                        ip += SL;
+
+                        const adjusted_idx = frame_pointer + idx;
+                        const v = try self.add(stack.items[adjusted_idx], .{ .i64 = incr });
+                        try stack.append(allocator, v);
+                        stack.items[adjusted_idx] = v;
                     },
                     .ADD => try self.arithmetic(stack, &add),
                     .SUBTRACT => try self.arithmetic(stack, &subtract),
@@ -268,18 +315,6 @@ pub fn VM(comptime App: type) type {
                             // pop the condition result (true/false) off the stack
                             self.release(stack.pop());
                         }
-                    },
-                    .INCR => {
-                        const incr: i64 = if (ip[0] == 0) -1 else ip[0];
-                        ip += 1;
-
-                        const idx = if (comptime SL == 1) ip[0] else @as(u16, @bitCast(ip[0..2].*));
-                        ip += SL;
-
-                        const adjusted_idx = frame_pointer + idx;
-                        const v = try self.add(stack.items[adjusted_idx], .{ .i64 = incr });
-                        try stack.append(allocator, v);
-                        stack.items[adjusted_idx] = v;
                     },
                     .INITIALIZE => {
                         const initialize_type: OpCode.Initialize = @enumFromInt(ip[0]);
