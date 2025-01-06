@@ -129,6 +129,14 @@ pub fn ByteCode(comptime App: type) type {
             try self.frame.write(self.allocator, name);
         }
 
+        pub fn debugGlobalVariableName(self: *Self, name: []const u8, idx: LocalIndex) !void {
+            std.debug.assert(comptime config.shouldDebug(App, .full));
+            try self.debug(.GLOBAL_NAME, SL + 1 + @as(u8, @intCast(name.len)));
+            try self.frame.write(self.allocator, std.mem.asBytes(&idx));
+            try self.frame.write(self.allocator, &.{@intCast(name.len)});
+            try self.frame.write(self.allocator, name);
+        }
+
         pub fn comment(self: *Self, value: []const u8) !void {
             if (comptime config.shouldDebug(App, .full)) {
                 const u16_len = @as(u16, @intCast(value.len));
@@ -192,10 +200,6 @@ pub fn ByteCode(comptime App: type) type {
             return code;
         }
 
-        // pub fn write(self: *Self, data: []const u8) !void {
-        //     return self.frame.write(self.allocator, data);
-        // }
-
         pub fn insertInt(self: *Self, comptime T: type, pos: u32, value: T) void {
             const end = pos + @sizeOf(T);
             @memcpy(self.frame.buf[pos..end], std.mem.asBytes(&value));
@@ -249,19 +253,23 @@ pub fn ByteCode(comptime App: type) type {
             return self.opWithData(.INITIALIZE, &buf);
         }
 
-        pub fn setLocal(self: *Self, local_index: LocalIndex) !void {
-            return self.opWithData(.SET_LOCAL, std.mem.asBytes(&local_index));
+        pub fn setVariable(self: *Self, local_index: LocalIndex, is_global: bool) !void {
+            const op_code = if (is_global) OpCode.SET_GLOBAL else OpCode.SET_LOCAL;
+            return self.opWithData(op_code, std.mem.asBytes(&local_index));
         }
 
-        pub fn getLocal(self: *Self, local_index: LocalIndex) !void {
-            return self.opWithData(.GET_LOCAL, std.mem.asBytes(&local_index));
+        pub fn getVariable(self: *Self, local_index: LocalIndex, is_global: bool) !void {
+            const op_code = if (is_global) OpCode.GET_GLOBAL else OpCode.GET_LOCAL;
+            return self.opWithData(op_code, std.mem.asBytes(&local_index));
         }
 
-        pub fn incr(self: *Self, local_index: LocalIndex, value: u8) !void {
+        pub fn incr(self: *Self, local_index: LocalIndex, is_global: bool, value: u8) !void {
+            const op_code = if (is_global) OpCode.INCR_GLOBAL else OpCode.INCR_LOCAL;
+
             var buf: [1 + SL]u8 = undefined;
             buf[0] = value;
             @memcpy(buf[1..], std.mem.asBytes(&local_index));
-            try self.opWithData(.INCR, &buf);
+            try self.opWithData(op_code, &buf);
         }
 
         pub fn debug(self: *Self, debug_code: OpCode.Debug, len: u16) !void {
@@ -398,6 +406,15 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                         try variable_names.put(idx, code[i .. i + variable_name_length]);
                         i += variable_name_length;
                     },
+                    .GLOBAL_NAME => {
+                        const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
+                        i += SL;
+                        const variable_name_length = code[i];
+                        i += 1;
+
+                        try variable_names.put(idx, code[i .. i + variable_name_length]);
+                        i += variable_name_length;
+                    },
                     .COMMENT => {
                         const len = @as(u16, @bitCast(code[i .. i + 2][0..2].*));
                         i += 2;
@@ -449,12 +466,12 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 try std.fmt.format(writer, " {x:0>4}\n", .{target});
                 i += 2;
             },
-            .SET_LOCAL => {
+            .GET_GLOBAL, .GET_LOCAL => {
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
                 try std.fmt.format(writer, " {s}@{d}\n", .{ variable_names.get(idx) orelse "", idx });
                 i += SL;
             },
-            .GET_LOCAL => {
+            .SET_GLOBAL, .SET_LOCAL => {
                 const idx = @as(LocalIndex, @bitCast(code[i .. i + SL][0..SL].*));
                 try std.fmt.format(writer, " {s}@{d}\n", .{ variable_names.get(idx) orelse "", idx });
                 i += SL;
@@ -472,7 +489,7 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 i += 2;
                 try std.fmt.format(writer, " {s}({d})\n", .{ @tagName(m), arity });
             },
-            .INCR => {
+            .INCR_GLOBAL, .INCR_LOCAL => {
                 // i += 0 is pretty rare. So use value 0 for -1, which is more
                 // common (i.e. i--)
                 const value: i16 = if (code[i] == 0) -1 else code[i];
@@ -549,9 +566,11 @@ pub const OpCode = enum(u8) {
     EQUAL,
     FOREACH,
     FOREACH_ITERATE,
+    GET_GLOBAL,
     GET_LOCAL,
     GREATER,
-    INCR,
+    INCR_LOCAL,
+    INCR_GLOBAL,
     INCR_REF,
     INDEX_GET,
     INDEX_SET,
@@ -572,12 +591,14 @@ pub const OpCode = enum(u8) {
     PRINT,
     PUSH,
     RETURN,
+    SET_GLOBAL,
     SET_LOCAL,
     SUBTRACT,
 
     const Debug = enum {
         FUNCTION_NAME,
         VARIABLE_NAME,
+        GLOBAL_NAME,
         COMMENT,
     };
 

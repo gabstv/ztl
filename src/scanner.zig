@@ -30,6 +30,23 @@ pub const Scanner = struct {
         self.scratch.clearRetainingCapacity();
     }
 
+   // Used by our caller to figure out the position of the next token
+    // might as well use this opportunity to skip the whitespace with respect
+    // to our self.pos;
+    pub fn skipSpaces(self: *Scanner) u32 {
+        var pos = self.pos;
+        const src = self.src;
+
+        while (pos < src.len) {
+            switch (src[pos]) {
+                ' ', '\t', '\r', '\n' => pos += 1,
+                else => break,
+            }
+        }
+        self.pos = pos;
+        return pos;
+    }
+
     pub fn next(self: *Scanner) Error!Token {
         var pos = self.pos;
         const src = self.src;
@@ -51,12 +68,16 @@ pub const Scanner = struct {
                 '.' => return .{.DOT = {}},
                 '$' => return .{.DOLLAR = {}},
                 '?' => return .{.QUESTION_MARK = {}},
-                '%' => {
-                    if (self.at(pos) == '{') {
+                '%' => switch (self.at(pos)) {
+                    '{' => {
                         pos += 1;
                         return .{.PERCENT_BRACE = {}};
-                    }
-                    return .{.PERCENT = {}};
+                    },
+                    '>' => {
+                        pos += 1;
+                        return .{.PERCENT_GREATER = {}};
+                    },
+                    else => return .{.PERCENT = {}},
                 },
                 '+' => {
                     if (self.at(pos) == '+') {
@@ -118,12 +139,16 @@ pub const Scanner = struct {
                     }
                     return .{.GREATER = {}};
                 },
-                '<' => {
-                    if (self.at(pos) == '=') {
+                '<' => switch (self.at(pos)) {
+                    '=' => {
                         pos += 1;
                         return .{.LESSER_EQUAL = {}};
-                    }
-                    return .{.LESSER = {}};
+                    },
+                    '%' => {
+                        pos += 1;
+                        return .{.LESSER_PERCENT = {}};
+                    },
+                    else => return .{.LESSER = {}},
                 },
                 '0'...'9' => return self.number(&pos),
                 '"' => return self.string(&pos),
@@ -146,16 +171,10 @@ pub const Scanner = struct {
         return .{.EOF = {}};
     }
 
-    pub fn peek(self: *Scanner, needles: []const Token) bool {
+    pub fn peek(self: *Scanner) Token {
         const pos = self.pos;
         defer self.pos = pos;
-        for (needles) |n| {
-            const token = self.next() catch return false;
-            if (@intFromEnum(token) != @intFromEnum(n)) {
-                return false;
-            }
-        }
-        return true;
+        return self.next() catch unreachable;
     }
 
     fn at(self: *Scanner, pos: usize) u8 {
@@ -352,6 +371,7 @@ pub const Token = union(enum) {
     LEFT_PARENTHESIS,
     LESSER,
     LESSER_EQUAL,
+    LESSER_PERCENT,
     MINUS,
     MINUS_EQUAL,
     MINUS_MINUS,
@@ -360,6 +380,7 @@ pub const Token = union(enum) {
     ORELSE,
     PERCENT,
     PERCENT_BRACE,
+    PERCENT_GREATER,
     PIPE,
     PLUS,
     PLUS_EQUAL,
@@ -409,6 +430,7 @@ pub const Token = union(enum) {
             .LEFT_PARENTHESIS => return writer.writeAll("("),
             .LESSER => return writer.writeAll("<"),
             .LESSER_EQUAL => return writer.writeAll("<="),
+            .LESSER_PERCENT => return writer.writeAll("<%"),
             .MINUS => return writer.writeAll("-"),
             .MINUS_EQUAL => return writer.writeAll("-="),
             .MINUS_MINUS => return writer.writeAll("--"),
@@ -417,6 +439,7 @@ pub const Token = union(enum) {
             .ORELSE => return writer.writeAll("orelse"),
             .PERCENT => return writer.writeAll("%"),
             .PERCENT_BRACE => return writer.writeAll("%{"),
+            .PERCENT_GREATER => return writer.writeAll("%>"),
             .PIPE => return writer.writeAll("}"),
             .PLUS => return writer.writeAll("+"),
             .PLUS_EQUAL => return writer.writeAll("+="),

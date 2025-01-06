@@ -58,39 +58,27 @@ test "tests:afterEach" {
 }
 
 test "ztl: local limit" {
-    blk: {
-        var c = Compiler(struct {
-            pub const ZtlConfig = struct {
-                pub const max_locals = 3;
-            };
-        }).init(t.arena.allocator()) catch unreachable;
+    defer t.reset();
 
-        var error_report = CompileErrorReport{};
-        c.compile(
-            \\ var a = 1;
-            \\ var b = 1;
-            \\ var c = 1;
-            \\ var d = 1;
-        , .{.error_report = &error_report}) catch {
-            try t.expectString("Maximum number of local variable (3) exceeded", error_report.message);
-            break :blk;
+    const App = struct {
+        pub const ZtlConfig = struct {
+            pub const max_locals = 3;
         };
-        return error.NoError;
-    }
+    };
 
-    {
-        var c = Compiler(struct {
-            pub const ZtlConfig = struct {
-                pub const max_locals = 3;
-            };
-        }).init(t.arena.allocator()) catch unreachable;
+    try testErrorWithApp(App, "Maximum number of local variable (3) exceeded",
+        \\ var a = 1;
+        \\ var b = 1;
+        \\ var c = 1;
+        \\ var d = 1;
+    );
 
-        try c.compile(
-            \\ var a = 1;
-            \\ var b = 1;
-            \\ var c = 1;
-        , .{});
-    }
+    try testReturnValueWithApp(App, .{}, .{ .i64 = 11 },
+        \\ var a = 1;
+        \\ var b = 1;
+        \\ var c = 1;
+        \\ return 11;
+    );
 }
 
 test "ztl: arithmetic" {
@@ -1261,6 +1249,15 @@ test "ztl: stack overflow" {
 }
 
 test "ztl: ztl functions" {
+    try testError("IdentifierTooLong", "fn " ++ "x" ** 128 ++ "(){}");
+
+    try testError("Unreachable code detected",
+        \\ fn a() {
+        \\  return "a";
+        \\  return "b";
+        \\ }
+    );
+
     try testReturnValue(.{ .i64 = 25 },
         \\ return value(3);
         \\
@@ -1336,15 +1333,6 @@ test "ztl: ztl functions" {
         \\      return a * 2;
         \\    }
         \\    return a;
-        \\ }
-    );
-
-    try testError("IdentifierTooLong", "fn " ++ "x" ** 128 ++ "(){}");
-
-    try testError("Unreachable code detected",
-        \\ fn a() {
-        \\  return "a";
-        \\  return "b";
         \\ }
     );
 }
@@ -1654,7 +1642,7 @@ test "ztl: method concat" {
     }
 }
 
-fn testReturnValue(expected: Value, src: []const u8) !void {
+fn testReturnValue(expected: Value, comptime src: []const u8) !void {
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const debug = DebugMode.full;
@@ -1677,13 +1665,13 @@ fn testReturnValue(expected: Value, src: []const u8) !void {
     }, .{}, expected, src);
 }
 
-fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, src: []const u8) !void {
+fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, comptime src: []const u8) !void {
     const allocator = t.arena.allocator();
 
     const byte_code = blk: {
         var error_report = CompileErrorReport{};
         var c = try Compiler(App).init(allocator);
-        c.compile(src, .{.error_report = &error_report}) catch |err| {
+        c.compile("<% " ++ src ++ "%>", .{.error_report = &error_report}) catch |err| {
             std.debug.print("Compilation error: {any}\n{}\n", .{err, error_report});
             return err;
         };
@@ -1713,17 +1701,21 @@ fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, src: []
     try checkVMForLeaks(&vm);
 }
 
-fn testError(expected: []const u8, src: []const u8) !void {
+fn testError(expected: []const u8, comptime src: []const u8) !void {
     return testErrorWithApp(void, expected, src);
 }
 
-fn testErrorWithApp(comptime App: type, expected: []const u8, src: []const u8) !void {
+fn testErrorWithApp(comptime App: type, expected: []const u8, comptime src: []const u8) !void {
     var error_report = CompileErrorReport{};
     var c = Compiler(App).init(t.arena.allocator()) catch unreachable;
 
-    c.compile(src, .{.error_report = &error_report}) catch {
-        if (std.mem.indexOf(u8, error_report.message, expected) == null) {
-            std.debug.print("Wrong error\nexpected: '{s}'\nactual:   '{s}'\n", .{ expected, error_report.message });
+    c.compile("<% " ++ src ++ " %>", .{.error_report = &error_report}) catch {
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(t.allocator);
+
+        try std.fmt.format(buf.writer(t.allocator), "{}", .{error_report});
+        if (std.mem.indexOf(u8, buf.items, expected) == null) {
+            std.debug.print("Wrong error\nexpected: '{s}'\nactual:   '{s}'\n", .{ expected, buf.items});
             return error.WrongError;
         }
         return;
@@ -1732,10 +1724,10 @@ fn testErrorWithApp(comptime App: type, expected: []const u8, src: []const u8) !
     return error.NoError;
 }
 
-fn testRuntimeError(expected: []const u8, src: []const u8) !void {
+fn testRuntimeError(expected: []const u8, comptime src: []const u8) !void {
     var error_report = CompileErrorReport{};
     var c = try Compiler(void).init(t.arena.allocator());
-    c.compile(src, .{.error_report = &error_report}) catch |err| {
+    c.compile("<% " ++ src ++ " %>", .{.error_report = &error_report}) catch |err| {
         std.debug.print("Compilation error: {any}\n{}\n", .{err, error_report});
         return err;
     };
@@ -1750,6 +1742,7 @@ fn testRuntimeError(expected: []const u8, src: []const u8) !void {
     try checkVMForLeaks(&vm);
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(t.allocator);
     _ = vm.run(byte_code, buf.writer(t.allocator)) catch {
         if (std.mem.indexOf(u8, vm.err.?, expected) == null) {
             std.debug.print("Wrong error, expected: {s} but got:\n{s}\n", .{ expected, vm.err.? });

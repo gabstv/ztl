@@ -15,7 +15,6 @@ const ByteCode = @import("byte_code.zig").ByteCode;
 const ErrorReport = @import("error_report.zig").Compile;
 
 const CompileOpts = struct {
-    force_locals: []const []const u8 = &.{},
     error_report: ?*ErrorReport = null,
 };
 
@@ -28,6 +27,7 @@ pub fn Compiler(comptime A: type) type {
     };
 
     const MAX_LOCALS = config.extract(App, "max_locals");
+    const ESCAPE_BY_DEFAULT = config.extract(App, "escape_by_default");
     const DEDUPLICATE_STRING_LITERALS = config.extract(A, "deduplicate_string_literals");
 
     const CustomFunctions = ztl.Functions(App);
@@ -49,6 +49,8 @@ pub fn Compiler(comptime A: type) type {
     return struct {
         err: ?[]const u8,
 
+        mode: Mode,
+
         // the ByteCode that our compiler is generating
         writer: ByteCode(App),
 
@@ -64,8 +66,7 @@ pub fn Compiler(comptime A: type) type {
         // previous token to successfully parsed.
         current: Token,
         previous: Token,
-        current_start: u32,
-        current_end: u32,
+        error_pos: u32,
 
         functions: std.StringHashMapUnmanaged(Function),
         function_calls: std.ArrayListUnmanaged(Function.Call),
@@ -74,6 +75,9 @@ pub fn Compiler(comptime A: type) type {
         // Also assigned to a local to determine in what scope the local can be used
         scopes: std.ArrayListUnmanaged(Scope),
         locals: std.ArrayListUnmanaged(Local),
+
+        // list of @global variables
+        globals: std.StringHashMapUnmanaged(usize),
 
         // Used to dedupe string literals. Stores the data_start value of
         // a given string. Can be turned off by setting zt_deduplicatestring_literals = false;
@@ -85,52 +89,62 @@ pub fn Compiler(comptime A: type) type {
 
         const Self = @This();
 
+        const Mode = enum {
+            code,     // <% ... %>
+            output,   // <%= ... %>
+            literal,  // everything NOT in the above
+            literal_strip_left,
+        };
+
         // we expect allocator to be an arena
         pub fn init(allocator: Allocator) !Self {
             return .{
                 .err = null,
                 .scopes = .{},
                 .locals = .{},
+                .globals = .{},
                 .functions = .{},
+                .mode = .literal,
                 .arena = allocator,
                 .function_calls = .{},
                 .string_literals = .{},
                 .jumper = Jumper(App).init(allocator),
                 .writer = try ByteCode(App).init(allocator),
-                .current_end = 0,
-                .current_start = 0,
+                .error_pos = 0,
                 .current = .{ .START = {} },
                 .previous = .{ .START = {} },
             };
         }
 
-        pub fn compile(self: *Self, src: []const u8, opts: CompileOpts) CompilerError!void {
+        pub fn compile(self: *Self, src: []const u8, opts: CompileOpts) Error!void {
             errdefer |err| if (opts.error_report) |er| {
+                var msg = self.err;
+                if (msg == null) {
+                    if (err == error.UnexpectedCharacter) {
+                        msg = std.fmt.allocPrint(self.arena, "('{c}')", .{src[self.error_pos]}) catch null;
+                    }
+                }
+
                 er.* = .{
                     .src = src,
                     .err = err,
-                    .end = self.current_end,
-                    .start = self.current_start,
-                    .message = self.err orelse @errorName(err),
+                    .pos = self.error_pos,
+                    .message = msg orelse "",
                 };
             };
+            var writer = &self.writer;
 
             self.scanner = Scanner.init(self.arena, src);
-            try self.advance();
-
-            self.writer.beginScript();
+            writer.beginScript();
             try self.beginScope(false);
 
-            // see template.zig's hack around globals to understand what this is
-            for (opts.force_locals) |name| {
-                try self.locals.append(self.arena, .{
-                    .depth = 0,
-                    .name = name,
-                });
+            while (self.current != .EOF) {
+                try self.declaration();
             }
 
-            while (try self.match(.EOF) == false) {
-                try self.declaration();
+            if (self.mode == .code or self.mode == .output) {
+                self.err = "Missing expected end tag, '%>'";
+                return error.UnexpectedEOF;
             }
 
             var it = self.functions.iterator();
@@ -148,22 +162,24 @@ pub fn Compiler(comptime A: type) type {
                     return error.WrongParameterCount;
                 }
             }
+
+            try writer.null();
+            try writer.op(.RETURN);
         }
 
         fn advance(self: *Self) !void {
             self.previous = self.current;
 
             var scanner = &self.scanner;
-            self.current_start = scanner.pos;
+            self.error_pos = scanner.skipSpaces();
             self.current = try scanner.next();
-            self.current_end = scanner.pos;
         }
 
         fn consumeSemicolon(self: *Self) !void {
             return self.consume(.SEMICOLON, "semicolon (';')");
         }
 
-        fn consume(self: *Self, expected: std.meta.Tag(Token), comptime message: []const u8) CompilerError!void {
+        fn consume(self: *Self, expected: std.meta.Tag(Token), comptime message: []const u8) Error!void {
             if (try self.match(expected)) {
                 return;
             }
@@ -179,88 +195,209 @@ pub fn Compiler(comptime A: type) type {
             return false;
         }
 
-        fn declaration(self: *Self) CompilerError!void {
-            switch (self.current) {
-                .VAR => {
-                    try self.advance();
-                    return self.variableInitialization();
-                },
-                .FN => {
-                    try self.advance();
-                    const bc = &self.writer;
-
-                    if (try self.match(.PRINT)) {
-                        self.setError("Function 'print' reserved as built-in function");
-                        return error.ReservedFunction;
-                    }
-                    try self.consume(.IDENTIFIER, "function name");
-                    const name = self.previous.IDENTIFIER;
-                    if (CustomFunctionLookup.get(name) != null) {
-                        try self.setErrorFmt("Function '{s}' reserved by custom application function", .{name});
-                        return error.ReservedFunction;
-                    }
-
-                    try self.consume(.LEFT_PARENTHESIS, "'(' after function name'");
-
-                    try self.beginScope(false);
-                    var arity: u16 = 0;
-                    if (try self.match(.RIGHT_PARENTHESIS) == false) {
-                        // parse argument list
-                        const scope_depth = self.scopeDepth();
-                        var locals = &self.locals;
-                        while (true) {
-                            arity += 1;
-                            if (arity > 255) {
-                                try self.setErrorMaxArity(name);
-                                return error.WrongParameterCount;
+        fn declaration(self: *Self) Error!void {
+            switch (self.mode) {
+                .literal, .literal_strip_left => try self.literal(),
+                .output => {
+                    var op_code = if (ESCAPE_BY_DEFAULT) OpCode.OUTPUT_ESCAPE else OpCode.OUTPUT;
+                    if (self.current == .IDENTIFIER) {
+                        const maybe_keyword = self.current.IDENTIFIER;
+                        if (ESCAPE_BY_DEFAULT) {
+                            if (std.mem.eql(u8, maybe_keyword, "safe")) {
+                                op_code = .OUTPUT;
+                                try self.advance();
                             }
-
-                            try self.consume(.IDENTIFIER, "variable name");
-
-                            // Function parameters are just locals to the function
-                            // The way the VM loads them means that they'll be
-                            // "initialized" in the caller.
-                            const variable_name = self.previous.IDENTIFIER;
-                            try locals.append(self.arena, .{
-                                .depth = scope_depth,
-                                .name = variable_name,
-                            });
-
-                            if (try self.match(.RIGHT_PARENTHESIS)) {
-                                break;
-                            }
-                            try self.consume(.COMMA, "parameter separator (',')");
+                        } else if (std.mem.eql(u8, maybe_keyword, "escape")) {
+                            op_code = .OUTPUT_ESCAPE;
+                            try self.advance();
                         }
                     }
 
-                    try self.consume(.LEFT_BRACE, "'{{' before function body");
-
-                    var gop = try self.functions.getOrPut(self.arena, name);
-                    if (gop.found_existing) {
-                        if (gop.value_ptr.code_pos != null) {
-                            try self.setErrorFmt("Function '{s}' already declared", .{name});
-                            return error.FunctionRedeclared;
-                        }
-                    } else {
-                        gop.value_ptr.* = try self.newFunction(name);
+                    if (try self.match(.PERCENT_GREATER)) {
+                        // skip empty
+                        self.mode = .literal;
+                        return;
                     }
-
-                    try bc.beginFunction(name);
-                    try self.block();
-                    if (self.currentScope().has_return == false) {
-                        try bc.null();
-                        try bc.op(.RETURN);
+                    while (self.mode == .output) {
+                        try self.expression();
                     }
-                    try self.endScope(true);
-
-                    gop.value_ptr.arity = @intCast(arity);
-                    gop.value_ptr.code_pos = try bc.endFunction(gop.value_ptr.data_pos, @intCast(arity));
+                    try self.writer.op(op_code);
                 },
-                else => return self.statement(),
+                .code =>  switch (self.current) {
+                    .PERCENT_GREATER => {
+                        self.mode = .literal;
+                        return;
+                    },
+                    .MINUS => {
+                        if (self.scanner.peek() == .PERCENT_GREATER) {
+                            try self.advance();
+                            self.mode = .literal_strip_left;
+                            return;
+                        }
+                        return self.statement();
+                    },
+                    .VAR => {
+                        try self.advance();
+                        return self.variableInitialization();
+                    },
+                    .FN => {
+                        try self.advance();
+                        const writer = &self.writer;
+
+                        if (try self.match(.PRINT)) {
+                            self.setError("Function 'print' reserved as built-in function");
+                            return error.ReservedFunction;
+                        }
+                        try self.consume(.IDENTIFIER, "function name");
+                        const name = self.previous.IDENTIFIER;
+                        if (CustomFunctionLookup.get(name) != null) {
+                            try self.setErrorFmt("Function '{s}' reserved by custom application function", .{name});
+                            return error.ReservedFunction;
+                        }
+
+                        try self.consume(.LEFT_PARENTHESIS, "'(' after function name'");
+
+                        try self.beginScope(false);
+                        var arity: u16 = 0;
+                        if (try self.match(.RIGHT_PARENTHESIS) == false) {
+                            // parse argument list
+                            const scope_depth = self.scopeDepth();
+                            var locals = &self.locals;
+                            while (true) {
+                                arity += 1;
+                                if (arity > 255) {
+                                    try self.setErrorMaxArity(name);
+                                    return error.WrongParameterCount;
+                                }
+
+                                try self.consume(.IDENTIFIER, "variable name");
+
+                                // Function parameters are just locals to the function
+                                // The way the VM loads them means that they'll be
+                                // "initialized" in the caller.
+                                const variable_name = self.previous.IDENTIFIER;
+                                try locals.append(self.arena, .{
+                                    .depth = scope_depth,
+                                    .name = variable_name,
+                                });
+
+                                if (try self.match(.RIGHT_PARENTHESIS)) {
+                                    break;
+                                }
+                                try self.consume(.COMMA, "parameter separator (',')");
+                            }
+                        }
+
+                        try self.consume(.LEFT_BRACE, "'{{' before function body");
+
+                        var gop = try self.functions.getOrPut(self.arena, name);
+                        if (gop.found_existing) {
+                            if (gop.value_ptr.code_pos != null) {
+                                try self.setErrorFmt("Function '{s}' already declared", .{name});
+                                return error.FunctionRedeclared;
+                            }
+                        } else {
+                            gop.value_ptr.* = try self.newFunction(name);
+                        }
+
+                        try writer.beginFunction(name);
+                        try self.block();
+                        if (self.currentScope().has_return == false) {
+                            try writer.null();
+                            try writer.op(.RETURN);
+                        }
+                        try self.endScope(true);
+
+                        gop.value_ptr.arity = @intCast(arity);
+                        gop.value_ptr.code_pos = try writer.endFunction(gop.value_ptr.data_pos, @intCast(arity));
+                    },
+                    else => return self.statement(),
+                }
             }
         }
 
-        fn variableInitialization(self: *Self) CompilerError!void {
+        fn literal(self: *Self) Error!void {
+            var writer = &self.writer;
+            var scanner = &self.scanner;
+
+            var pos = scanner.pos;
+            var start = pos;
+            const src = scanner.src;
+            const end: u32 = @intCast(src.len - 1);
+
+            while (true) {
+                const idx: u32 = @intCast(std.mem.indexOfScalarPos(u8, src, pos, '%') orelse end);
+                if (idx == end) {
+                    var lit = src[start..];
+                    if (self.mode == .literal_strip_left) {
+                        lit = std.mem.trimLeft(u8, lit, &std.ascii.whitespace);
+                    }
+                    if (lit.len > 0) {
+                        _ = try writer.string(lit);
+                        try writer.op(.OUTPUT);
+                    }
+
+                    scanner.pos = @intCast(src.len);
+                    return self.advance();
+                }
+
+                if (idx == 0 or src[idx - 1] != '<') {
+                    pos = idx + 1;
+                    // start stays the same
+                    continue;
+                }
+
+                var next = src[idx + 1]; // safe because we checked if idx == end earlier
+                if (next == '%') {
+                    // <%% -> <%
+
+                    var lit = src[start..idx];
+                    if (self.mode == .literal_strip_left) {
+                        lit = std.mem.trimLeft(u8, lit, &std.ascii.whitespace);
+                        self.mode = .literal;
+                    }
+                    if (lit.len > 0) {
+                        _ = try writer.string(lit);
+                        try writer.op(.OUTPUT);
+                    }
+                    pos = idx + 1;
+                    start = pos;
+                    continue;
+                }
+
+                var lit = src[start..idx - 1];
+                // skip the %
+                pos = idx + 1;
+
+                if (next == '-' and pos != end) {
+                    pos += 1;
+                    next = src[pos];
+                    lit = std.mem.trimRight(u8, lit, &std.ascii.whitespace);
+                }
+
+                if (self.mode == .literal_strip_left) {
+                    lit = std.mem.trimLeft(u8, lit, &std.ascii.whitespace);
+                    self.mode = .literal;
+                }
+
+                if (lit.len > 0) {
+                    _ = try writer.string(lit);
+                    try writer.op(.OUTPUT);
+                }
+
+                if (next != '=') {
+                    self.mode = .code;
+                    scanner.pos = pos;
+                } else {
+                    self.mode = .output;
+                    scanner.pos = pos + 1;
+                }
+                try self.advance();
+                return;
+            }
+        }
+
+        fn variableInitialization(self: *Self) Error!void {
             try self.variableDeclaration(false);
 
             try self.consume(.EQUAL, "assignment operator ('=')");
@@ -271,7 +408,7 @@ pub fn Compiler(comptime A: type) type {
             self.locals.items[self.locals.items.len - 1].depth = self.scopeDepth();
         }
 
-        fn variableDeclaration(self: *Self, give_scope: bool) CompilerError!void {
+        fn variableDeclaration(self: *Self, give_scope: bool) Error!void {
             // "var" already consumed
             try self.consume(.IDENTIFIER, "variable name");
 
@@ -302,13 +439,13 @@ pub fn Compiler(comptime A: type) type {
             });
         }
 
-        fn statement(self: *Self) CompilerError!void {
+        fn statement(self: *Self) Error!void {
             const scope = self.currentScope();
             if (scope.has_return) {
                 self.setError("Unreachable code detected");
                 return error.UnreachableCode;
             }
-            var bc = &self.writer;
+            var writer = &self.writer;
             var jumper = &self.jumper;
             switch (self.current) {
                 .LEFT_BRACE => {
@@ -316,14 +453,6 @@ pub fn Compiler(comptime A: type) type {
                     try self.beginScope(true);
                     try self.block();
                     try self.endScope(false);
-                },
-                .DOLLAR => {
-                    try self.advance();
-                    const op =  if (try self.match(.DOLLAR)) OpCode.OUTPUT_ESCAPE else OpCode.OUTPUT;
-                    try self.expression();
-                    try self.consume(.SEMICOLON, "semicolon (';')");
-                    try bc.op(op);
-
                 },
                 .IF => {
                     try self.advance();
@@ -357,7 +486,7 @@ pub fn Compiler(comptime A: type) type {
                     } else if (try self.match(.SEMICOLON) == false) {
                         try self.expression();
                         try self.consumeSemicolon();
-                        try bc.pop();
+                        try writer.pop();
                     }
 
                     // this is where we jump back to after every loop
@@ -377,13 +506,13 @@ pub fn Compiler(comptime A: type) type {
                     var incr: []const u8 = &.{};
                     if (try self.match(.RIGHT_PARENTHESIS) == false) {
                         // increment
-                        bc.beginCapture();
+                        writer.beginCapture();
                         try self.expression();
-                        try bc.pop();
+                        try writer.pop();
                         // need to dupe, because the temp space used by scanner
                         // to capture might get reused (in a nested for, for example)
                         // because we use the value later on.
-                        incr = try self.arena.dupe(u8, bc.endCapture());
+                        incr = try self.arena.dupe(u8, writer.endCapture());
                         try self.consume(.RIGHT_PARENTHESIS, "closing parenthesis (')')");
                     }
 
@@ -399,7 +528,7 @@ pub fn Compiler(comptime A: type) type {
                     // is called, the code naturally jumps back to the top)
                     try breakable_scope.continueHere();
 
-                    try bc.write(incr);
+                    try writer.write(incr);
 
                     // back to condition check
                     try jump_loop_top.goto();
@@ -466,7 +595,7 @@ pub fn Compiler(comptime A: type) type {
                         return error.InvalidIterableCount;
                     }
 
-                    try bc.opWithData(.FOREACH, &.{@intCast(iterable_count)});
+                    try writer.opWithData(.FOREACH, &.{@intCast(iterable_count)});
 
                     // this is where we jump back to after every loop
                     const jump_loop_top = jumper.backward(self);
@@ -486,12 +615,12 @@ pub fn Compiler(comptime A: type) type {
                     // the same scope-restoration logic (which works fine for FOR
                     // and WHILE, but requires this hack for FOREACH).
                     for (0..variable_count) |_| {
-                        try bc.pop();
+                        try writer.pop();
                     }
 
-                    const continue_pos = bc.currentPos();
+                    const continue_pos = writer.currentPos();
 
-                    try bc.opWithData(.FOREACH_ITERATE, &.{@intCast(iterable_count)});
+                    try writer.opWithData(.FOREACH_ITERATE, &.{@intCast(iterable_count)});
                     const jump_if_false = try jumper.forward(self, .JUMP_IF_FALSE_POP);
 
                     // BODY
@@ -533,11 +662,11 @@ pub fn Compiler(comptime A: type) type {
                 .RETURN => {
                     try self.advance();
                     if (try self.match(.SEMICOLON)) {
-                        try bc.op(.RETURN);
+                        try writer.op(.RETURN);
                     } else {
                         try self.expression();
                         try self.consumeSemicolon();
-                        try bc.op(.RETURN);
+                        try writer.op(.RETURN);
                     }
                     scope.has_return = true;
                 },
@@ -574,17 +703,17 @@ pub fn Compiler(comptime A: type) type {
                     try self.consume(.LEFT_PARENTHESIS, "left parenthesis ('(')");
                     const arity = try self.parameterList(32);
                     try self.consumeSemicolon();
-                    try bc.opWithData(.PRINT, &.{arity});
+                    try writer.opWithData(.PRINT, &.{arity});
                 },
                 else => {
                     try self.expression();
                     try self.consumeSemicolon();
-                    try bc.pop();
+                    try writer.pop();
                 },
             }
         }
 
-        fn block(self: *Self) CompilerError!void {
+        fn block(self: *Self) Error!void {
             while (true) {
                 switch (self.current) {
                     .RIGHT_BRACE => return self.advance(),
@@ -597,11 +726,26 @@ pub fn Compiler(comptime A: type) type {
             }
         }
 
-        fn expression(self: *Self) CompilerError!void {
+        fn expression(self: *Self) Error!void {
             return self.parsePrecedence(.ASSIGNMENT);
         }
 
-        fn parsePrecedence(self: *Self, precedence: Precedence) CompilerError!void {
+        fn parsePrecedence(self: *Self, precedence: Precedence) Error!void {
+            if (self.mode == .output) {
+                const semicolon = self.current == .SEMICOLON;
+                if (semicolon) {
+                    try self.advance();
+                }
+                if (self.current == .PERCENT_GREATER) {
+                    self.mode = if (self.previous == .MINUS) .literal_strip_left else .literal;
+                    return;
+                }
+                if (semicolon) {
+                    try self.setExpectationError("Closing output tag '%>'");
+                    return error.Invalid;
+                }
+            }
+
             try self.advance();
             const can_assign = @intFromEnum(precedence) <= @intFromEnum(Precedence.ASSIGNMENT);
             {
@@ -616,6 +760,11 @@ pub fn Compiler(comptime A: type) type {
 
             const nprec = @intFromEnum(precedence);
             while (true) {
+                if (self.current == .MINUS and self.scanner.peek() == .PERCENT_GREATER) {
+                    try self.advance();
+                    self.mode = .literal_strip_left;
+                    return;
+                }
                 const rule = ParseRule(Self).get(self.current);
                 if (nprec > rule.precedence) {
                     break;
@@ -625,12 +774,12 @@ pub fn Compiler(comptime A: type) type {
             }
         }
 
-        fn grouping(self: *Self, _: bool) CompilerError!void {
+        fn grouping(self: *Self, _: bool) Error!void {
             try self.expression();
             return self.consume(.RIGHT_PARENTHESIS, "Expected closing parenthesis ')'");
         }
 
-        fn binary(self: *Self, _: bool) CompilerError!void {
+        fn binary(self: *Self, _: bool) Error!void {
             const previous = self.previous;
             const rule = ParseRule(Self).get(previous);
             try self.parsePrecedence(@enumFromInt(rule.precedence + 1));
@@ -651,7 +800,7 @@ pub fn Compiler(comptime A: type) type {
             }
         }
 
-        fn unary(self: *Self, _: bool) CompilerError!void {
+        fn unary(self: *Self, _: bool) Error!void {
             const previous = self.previous;
 
             try self.expression();
@@ -662,7 +811,7 @@ pub fn Compiler(comptime A: type) type {
             }
         }
 
-        fn number(self: *Self, _: bool) CompilerError!void {
+        fn number(self: *Self, _: bool) Error!void {
             switch (self.previous) {
                 .INTEGER => |value| try self.writer.i64(value),
                 .FLOAT => |value| try self.writer.f64(value),
@@ -670,58 +819,75 @@ pub fn Compiler(comptime A: type) type {
             }
         }
 
-        fn boolean(self: *Self, _: bool) CompilerError!void {
+        fn boolean(self: *Self, _: bool) Error!void {
             return self.writer.bool(self.previous.BOOLEAN);
         }
 
-        fn string(self: *Self, _: bool) CompilerError!void {
+        fn string(self: *Self, _: bool) Error!void {
             const string_token = self.previous.STRING;
             return self.stringLiteral(string_token);
         }
 
-        fn stringLiteral(self: *Self, literal: []const u8) !void {
+        fn stringLiteral(self: *Self, lit: []const u8) !void {
             if (DEDUPLICATE_STRING_LITERALS == false) {
-                _ = try self.writer.string(literal);
+                _ = try self.writer.string(lit);
                 return;
             }
 
-            if (self.string_literals.get(literal)) |data_start| {
+            if (self.string_literals.get(lit)) |data_start| {
                 return self.writer.stringRef(data_start);
             }
 
-            const data_start = try self.writer.string(literal);
-            try self.string_literals.put(self.arena, literal, data_start);
+            const data_start = try self.writer.string(lit);
+            try self.string_literals.put(self.arena, lit, data_start);
         }
 
-        fn @"null"(self: *Self, _: bool) CompilerError!void {
+        fn @"null"(self: *Self, _: bool) Error!void {
             return self.writer.null();
         }
 
-        fn identifier(self: *Self, can_assign: bool) CompilerError!void {
+        fn identifier(self: *Self, can_assign: bool) Error!void {
             if (self.current == .LEFT_PARENTHESIS) {
                 return self.call();
             }
             return self.variable(can_assign);
         }
 
-        fn variable(self: *Self, can_assign: bool) CompilerError!void {
+        fn variable(self: *Self, can_assign: bool) Error!void {
             const name = self.previous.IDENTIFIER;
 
-            const idx = self.localVariableIndex(name) orelse {
-                try self.setErrorFmt("Variable '{s}' is unknown", .{name});
-                return error.UnknownVariable;
-            };
+            const is_global = name[0] == '@';
+            var idx: usize = undefined;
 
-            if (self.locals.items[idx].depth == null) {
-                try self.setErrorFmt("Variable '{s}' used before being initialized", .{name});
-                return error.VaraibleNotInitialized;
+            if (is_global) {
+                const gop = try self.globals.getOrPut(self.arena, name);
+                if (gop.found_existing) {
+                    idx = gop.value_ptr.*;
+                } else {
+                    // -1 because we've already put this one in
+                    idx = self.globals.count() - 1;
+                    gop.value_ptr.* = idx;
+                    if (comptime config.shouldDebug(App, .full) == true) {
+                        try self.writer.debugGlobalVariableName(name, @intCast(idx));
+                    }
+                }
+            } else {
+                idx = self.localVariableIndex(name) orelse {
+                    try self.setErrorFmt("Variable '{s}' is unknown", .{name});
+                    return error.UnknownVariable;
+                };
+
+                if (self.locals.items[idx].depth == null) {
+                    try self.setErrorFmt("Variable '{s}' used before being initialized", .{name});
+                    return error.VaraibleNotInitialized;
+                }
             }
 
-            const bc = &self.writer;
+            const writer = &self.writer;
             if (can_assign) {
                 if (try self.match(.EQUAL)) {
                     try self.expression();
-                    return bc.setLocal(@intCast(idx));
+                    return writer.setVariable(@intCast(idx), is_global);
                 }
 
                 if (try self.match(.PLUS_EQUAL)) {
@@ -729,21 +895,21 @@ pub fn Compiler(comptime A: type) type {
                         .INTEGER => |n| switch (n) {
                             -1 => {
                                 try self.advance();
-                                return bc.incr(@intCast(idx), 0);
+                                return writer.incr(@intCast(idx), is_global, 0);
                             },
                             1...10 => {
                                 try self.advance();
-                                return bc.incr(@intCast(idx), @intCast(n));
+                                return writer.incr(@intCast(idx), is_global, @intCast(n));
                             },
                             else => {},
                         },
                         else => {},
                     }
 
-                    try bc.getLocal(@intCast(idx));
+                    try writer.getVariable(@intCast(idx), is_global);
                     try self.expression();
-                    try bc.op(.ADD);
-                    try bc.setLocal(@intCast(idx));
+                    try writer.op(.ADD);
+                    try writer.setVariable(@intCast(idx), is_global);
                     return;
                 }
 
@@ -752,32 +918,32 @@ pub fn Compiler(comptime A: type) type {
                         .INTEGER => |n| switch (n) {
                             1 => {
                                 try self.advance();
-                                return bc.incr(@intCast(idx), 0);
+                                return writer.incr(@intCast(idx), is_global, 0);
                             },
                             else => {},
                         },
                         else => {},
                     }
-                    try bc.getLocal(@intCast(idx));
+                    try writer.getVariable(@intCast(idx), is_global);
                     try self.expression();
-                    try bc.op(.SUBTRACT);
-                    try bc.setLocal(@intCast(idx));
+                    try writer.op(.SUBTRACT);
+                    try writer.setVariable(@intCast(idx), is_global);
                     return;
                 }
             }
 
             if (try self.match(.PLUS_PLUS)) {
-                return bc.incr(@intCast(idx), 1);
+                return writer.incr(@intCast(idx), is_global, 1);
             }
 
             if (try self.match(.MINUS_MINUS)) {
-                return bc.incr(@intCast(idx), 0);
+                return writer.incr(@intCast(idx), is_global, 0);
             }
 
-            return bc.getLocal(@intCast(idx));
+            return writer.getVariable(@intCast(idx), is_global);
         }
 
-        fn array(self: *Self, _: bool) CompilerError!void {
+        fn array(self: *Self, _: bool) Error!void {
             var value_count: u32 = 0;
             if (try self.match(.RIGHT_BRACKET) == false) {
                 while (true) {
@@ -792,15 +958,15 @@ pub fn Compiler(comptime A: type) type {
             try self.writer.initializeArray(value_count);
         }
 
-        fn map(self: *Self, _: bool) CompilerError!void {
+        fn map(self: *Self, _: bool) Error!void {
             var entry_count: u32 = 0;
-            var bc = self.writer;
+            var writer = &self.writer;
             if (try self.match(.RIGHT_BRACE) == false) {
                 while (true) {
                     entry_count += 1;
                     const current_token = self.current;
                     switch (current_token) {
-                        .INTEGER => |k| try bc.i64(k),
+                        .INTEGER => |k| try writer.i64(k),
                         .IDENTIFIER => |k| try self.stringLiteral(k),
                         .STRING => |k| try self.stringLiteral(k),
                         else => {
@@ -824,42 +990,42 @@ pub fn Compiler(comptime A: type) type {
             try self.writer.initializeMap(entry_count);
         }
 
-        fn index(self: *Self, can_assign: bool) CompilerError!void {
+        fn index(self: *Self, can_assign: bool) Error!void {
             try self.expression();
             try self.consume(.RIGHT_BRACKET, "left bracket (']')");
 
-            const bc = &self.writer;
+            const writer = &self.writer;
             if (can_assign) {
                 if (try self.match(.EQUAL)) {
                     try self.expression();
-                    return bc.op(.INDEX_SET);
+                    return writer.op(.INDEX_SET);
                 }
 
                 if (try self.match(.PLUS_EQUAL)) {
                     try self.expression();
-                    return bc.op(.INCR_REF);
+                    return writer.op(.INCR_REF);
                 }
 
                 if (try self.match(.MINUS_EQUAL)) {
                     try self.expression();
-                    return bc.op2(.NEGATE, .INCR_REF);
+                    return writer.op2(.NEGATE, .INCR_REF);
                 }
 
                 if (try self.match(.PLUS_PLUS)) {
-                    try bc.i64(1);
-                    return bc.op(.INCR_REF);
+                    try writer.i64(1);
+                    return writer.op(.INCR_REF);
                 }
 
                 if (try self.match(.MINUS_MINUS)) {
-                    try bc.i64(-1);
-                    return bc.op(.INCR_REF);
+                    try writer.i64(-1);
+                    return writer.op(.INCR_REF);
                 }
             }
 
-            return bc.op(.INDEX_GET);
+            return writer.op(.INDEX_GET);
         }
 
-        fn call(self: *Self) CompilerError!void {
+        fn call(self: *Self) Error!void {
             const name = self.previous.IDENTIFIER;
 
             try self.advance(); // consume '(
@@ -886,7 +1052,7 @@ pub fn Compiler(comptime A: type) type {
             return self.writer.opWithData(.CALL, std.mem.asBytes(&gop.value_ptr.data_pos));
         }
 
-        fn dot(self: *Self, _: bool) CompilerError!void {
+        fn dot(self: *Self, _: bool) Error!void {
             try self.consume(.IDENTIFIER, "property name");
             const name = self.previous.IDENTIFIER;
 
@@ -896,7 +1062,7 @@ pub fn Compiler(comptime A: type) type {
             return self.property(name);
         }
 
-        fn method(self: *Self, name: []const u8) CompilerError!void {
+        fn method(self: *Self, name: []const u8) Error!void {
             var _method: ?Method = null;
 
             const arity = try self.parameterList(5);
@@ -967,7 +1133,7 @@ pub fn Compiler(comptime A: type) type {
             }
         }
 
-        fn property(self: *Self, name: []const u8) CompilerError!void {
+        fn property(self: *Self, name: []const u8) Error!void {
             var _property: ?Property = null;
             switch (name.len) {
                 3 => switch (@as(u24, @bitCast(name[0..3].*))) {
@@ -991,7 +1157,7 @@ pub fn Compiler(comptime A: type) type {
             return self.writer.opWithData(.PROPERTY_GET, std.mem.asBytes(&property_id));
         }
 
-        fn @"and"(self: *Self, _: bool) CompilerError!void {
+        fn @"and"(self: *Self, _: bool) Error!void {
             // shortcircuit, the left side is already executed, if it's false, we
             // can skip the rest.
             const jump_if_false = try self.jumper.forward(self, .JUMP_IF_FALSE);
@@ -999,8 +1165,8 @@ pub fn Compiler(comptime A: type) type {
             try jump_if_false.goto();
         }
 
-        fn @"or"(self: *Self, _: bool) CompilerError!void {
-            const bc = &self.writer;
+        fn @"or"(self: *Self, _: bool) Error!void {
+            const writer = &self.writer;
             // Rather than add a new op (JUMP_IF_TRUE), we can simulate this by
             // combining JUMP_IF_FALSE to jump over a JUMP. IF the left side (
             // which we've already executed) is true, the JUMP_IF_FALSE will
@@ -1013,24 +1179,24 @@ pub fn Compiler(comptime A: type) type {
             // and this jump only exists to shortcircuit the condition because the condition is true
             const jump_if_true = try self.jumper.forward(self, .JUMP);
             try jump_if_false.goto();
-            try bc.pop();
+            try writer.pop();
             try self.parsePrecedence(.OR);
             try jump_if_true.goto();
         }
 
-        fn @"orelse"(self: *Self, _: bool) CompilerError!void {
-            const bc = &self.writer;
-            try bc.op(.PUSH);
-            try bc.null();
-            try bc.op(.EQUAL);
+        fn @"orelse"(self: *Self, _: bool) Error!void {
+            const writer = &self.writer;
+            try writer.op(.PUSH);
+            try writer.null();
+            try writer.op(.EQUAL);
 
             const jump_if_false = try self.jumper.forward(self, .JUMP_IF_FALSE_POP);
-            try bc.pop(); // pop off the left hand side (which was false)
+            try writer.pop(); // pop off the left hand side (which was false)
             try self.parsePrecedence(.OR);
             try jump_if_false.goto();
         }
 
-        fn ternary(self: *Self, _: bool) CompilerError!void {
+        fn ternary(self: *Self, _: bool) Error!void {
             const jump_if_false = try self.jumper.forward(self, .JUMP_IF_FALSE_POP);
             try self.expression();
             try self.consume(.COLON, "colon (':')");
@@ -1056,7 +1222,7 @@ pub fn Compiler(comptime A: type) type {
             return null;
         }
 
-        fn newFunction(self: *Self, name: []const u8) CompilerError!Function {
+        fn newFunction(self: *Self, name: []const u8) Error!Function {
             const data_pos = try self.writer.newFunction(name);
             return .{
                 .arity = null,
@@ -1092,9 +1258,9 @@ pub fn Compiler(comptime A: type) type {
             if (fast_pop) {
                 return;
             }
-            var bc = &self.writer;
+            var writer = &self.writer;
             for (0..scope_pop_count) |_| {
-                try bc.pop();
+                try writer.pop();
             }
         }
 
@@ -1134,7 +1300,7 @@ pub fn Compiler(comptime A: type) type {
             return arity;
         }
 
-        fn setExpectationError(self: *Self, comptime message: []const u8) CompilerError!void {
+        fn setExpectationError(self: *Self, comptime message: []const u8) Error!void {
             const current_token = self.current;
             return self.setErrorFmt("Expected " ++ message ++ ", got {} ({s})", .{ current_token, @tagName(current_token) });
         }
@@ -1157,7 +1323,7 @@ pub fn Compiler(comptime A: type) type {
     };
 }
 
-pub const CompilerError = error{
+pub const Error = error{
     UnexpectedToken,
     UnknownFunction,
     WrongParameterCount,
@@ -1262,12 +1428,12 @@ fn Jumper(comptime App: type) type {
         }
 
         fn forward(_: *const Self, compiler: *Compiler(App), op_code: OpCode) !Forward {
-            const bc = &compiler.writer;
+            const writer = &compiler.writer;
 
-            try bc.op(op_code);
+            try writer.op(op_code);
             // create placeholder for jump address
-            const jump_from = bc.currentPos();
-            try bc.write(&.{ 0, 0 });
+            const jump_from = writer.currentPos();
+            try writer.write(&.{ 0, 0 });
 
             return .{
                 .compiler = compiler,
@@ -1320,15 +1486,15 @@ fn Jumper(comptime App: type) type {
             const pop_count = compiler.scopePopCount(target_scope);
 
             // TODO: Add POPN op?
-            const bc = &compiler.writer;
+            const writer = &compiler.writer;
             for (0..pop_count) |_| {
-                try bc.pop();
+                try writer.pop();
             }
 
-            try bc.op(.JUMP);
+            try writer.op(.JUMP);
             // create placeholder for jump address
-            const jump_from = bc.currentPos();
-            try bc.write(&.{ 0, 0 });
+            const jump_from = writer.currentPos();
+            try writer.write(&.{ 0, 0 });
 
             var target = &list[list.len - levels];
             return target.append(self.arena, jump_from);
@@ -1339,14 +1505,14 @@ fn Jumper(comptime App: type) type {
             compiler: *Compiler(App),
 
             pub fn goto(self: Forward) !void {
-                const bc = &self.compiler.writer;
+                const writer = &self.compiler.writer;
 
                 // this is where we're jumping from. It's the start of the 2-byte
                 // address containing the jump delta.
                 const jump_from = self.jump_from;
 
                 // this is where we want to jump to
-                const jump_to = bc.currentPos();
+                const jump_to = writer.currentPos();
 
                 std.debug.assert(jump_to > jump_from);
 
@@ -1357,7 +1523,7 @@ fn Jumper(comptime App: type) type {
                     return error.JumpTooBig;
                 }
 
-                return bc.insertInt(i16, jump_from, @intCast(relative));
+                return writer.insertInt(i16, jump_from, @intCast(relative));
             }
         };
 
@@ -1366,14 +1532,14 @@ fn Jumper(comptime App: type) type {
             compiler: *Compiler(App),
 
             pub fn goto(self: Backward) !void {
-                const bc = &self.compiler.writer;
+                const writer = &self.compiler.writer;
 
                 // This is where we're jumping to
                 const jump_to = self.jump_to;
 
                 // This is where we're jumping from (+1 since we need to jump
                 // back over the JUMP instruction we're writing).
-                const jump_from = bc.currentPos() + 1;
+                const jump_from = writer.currentPos() + 1;
 
                 const relative: i64 = -(@as(i64, jump_from) - jump_to);
                 if (relative < -32_768) {
@@ -1382,8 +1548,8 @@ fn Jumper(comptime App: type) type {
                 }
                 var relative_i16: i16 = @intCast(relative);
 
-                try bc.op(.JUMP);
-                return bc.write(std.mem.asBytes(&relative_i16));
+                try writer.op(.JUMP);
+                return writer.write(std.mem.asBytes(&relative_i16));
             }
         };
 
@@ -1410,7 +1576,7 @@ fn Jumper(comptime App: type) type {
             }
 
             fn insertJumps(self: BreakableScope, list: []u32, jump_to: u32) !void {
-                var bc = &self.compiler.writer;
+                var writer = &self.compiler.writer;
 
                 for (list) |jump_from| {
                     const relative: i64 = @as(i64, jump_to) - jump_from;
@@ -1419,7 +1585,7 @@ fn Jumper(comptime App: type) type {
                         return error.JumpTooBig;
                     }
                     const relative_i16: i16 = @intCast(relative);
-                    bc.insertInt(i16, jump_from, @intCast(relative_i16));
+                    writer.insertInt(i16, jump_from, @intCast(relative_i16));
                 }
             }
         };
@@ -1428,8 +1594,8 @@ fn Jumper(comptime App: type) type {
 
 fn ParseRule(comptime C: type) type {
     return struct {
-        infix: ?*const fn (*C, bool) CompilerError!void,
-        prefix: ?*const fn (*C, bool) CompilerError!void,
+        infix: ?*const fn (*C, bool) Error!void,
+        prefix: ?*const fn (*C, bool) Error!void,
         precedence: i32,
 
         const Self = @This();
