@@ -175,8 +175,19 @@ pub fn Compiler(comptime A: type) type {
             self.current = try scanner.next();
         }
 
-        fn consumeSemicolon(self: *Self) !void {
-            return self.consume(.SEMICOLON, "semicolon (';')");
+        fn consumeSemicolon(self: *Self, allow_close_tag: bool) !void {
+            if (try self.match(.SEMICOLON))  {
+                return;
+            }
+            if (allow_close_tag) {
+                const current = self.current;
+                if (current == .PERCENT_GREATER or current == .MINUS_PERCENT_GREATER) {
+                    return;
+                }
+            }
+
+            try self.setExpectationError("semicolon (';')");
+            return error.UnexpectedToken;
         }
 
         fn consume(self: *Self, expected: std.meta.Tag(Token), comptime message: []const u8) Error!void {
@@ -213,11 +224,16 @@ pub fn Compiler(comptime A: type) type {
                         }
                     }
 
+                    // skip empty
                     if (try self.match(.PERCENT_GREATER)) {
-                        // skip empty
                         self.mode = .literal;
                         return;
                     }
+                    if (try self.match(.MINUS_PERCENT_GREATER)) {
+                        self.mode = .literal_strip_left;
+                        return;
+                    }
+
                     while (self.mode == .output) {
                         try self.expression();
                     }
@@ -228,13 +244,9 @@ pub fn Compiler(comptime A: type) type {
                         self.mode = .literal;
                         return;
                     },
-                    .MINUS => {
-                        if (self.scanner.peek() == .PERCENT_GREATER) {
-                            try self.advance();
-                            self.mode = .literal_strip_left;
-                            return;
-                        }
-                        return self.statement();
+                    .MINUS_PERCENT_GREATER => {
+                        self.mode = .literal_strip_left;
+                        return;
                     },
                     .VAR => {
                         try self.advance();
@@ -402,7 +414,7 @@ pub fn Compiler(comptime A: type) type {
 
             try self.consume(.EQUAL, "assignment operator ('=')");
             try self.expression();
-            try self.consumeSemicolon();
+            try self.consumeSemicolon(true);
 
             // prevents things like: var count = count + 1;
             self.locals.items[self.locals.items.len - 1].depth = self.scopeDepth();
@@ -485,7 +497,7 @@ pub fn Compiler(comptime A: type) type {
                         try self.variableInitialization();
                     } else if (try self.match(.SEMICOLON) == false) {
                         try self.expression();
-                        try self.consumeSemicolon();
+                        try self.consumeSemicolon(false);
                         try writer.pop();
                     }
 
@@ -498,7 +510,7 @@ pub fn Compiler(comptime A: type) type {
                     if (try self.match(.SEMICOLON) == false) {
                         // we have a condition!
                         try self.expression();
-                        try self.consumeSemicolon();
+                        try self.consumeSemicolon(false);
 
                         jump_loop_false = try jumper.forward(self, .JUMP_IF_FALSE_POP);
                     }
@@ -665,7 +677,7 @@ pub fn Compiler(comptime A: type) type {
                         try writer.op(.RETURN);
                     } else {
                         try self.expression();
-                        try self.consumeSemicolon();
+                        try self.consumeSemicolon(true);
                         try writer.op(.RETURN);
                     }
                     scope.has_return = true;
@@ -681,7 +693,7 @@ pub fn Compiler(comptime A: type) type {
                         }
                         break_count = @intCast(value);
                     }
-                    try self.consumeSemicolon();
+                    try self.consumeSemicolon(true);
                     try self.jumper.insertBreak(self, break_count);
                 },
                 .CONTINUE => {
@@ -695,12 +707,12 @@ pub fn Compiler(comptime A: type) type {
                         }
                         continue_count = @intCast(value);
                     }
-                    try self.consumeSemicolon();
+                    try self.consumeSemicolon(true);
                     try self.jumper.insertContinue(self, continue_count);
                 },
                 else => {
                     try self.expression();
-                    try self.consumeSemicolon();
+                    try self.consumeSemicolon(true);
                     try writer.pop();
                 },
             }
@@ -730,7 +742,11 @@ pub fn Compiler(comptime A: type) type {
                     try self.advance();
                 }
                 if (self.current == .PERCENT_GREATER) {
-                    self.mode = if (self.previous == .MINUS) .literal_strip_left else .literal;
+                    self.mode = .literal;
+                    return;
+                }
+                if (self.current == .MINUS_PERCENT_GREATER) {
+                    self.mode = .literal_strip_left;
                     return;
                 }
                 if (semicolon) {
@@ -753,11 +769,6 @@ pub fn Compiler(comptime A: type) type {
 
             const nprec = @intFromEnum(precedence);
             while (true) {
-                if (self.current == .MINUS and self.scanner.peek() == .PERCENT_GREATER) {
-                    try self.advance();
-                    self.mode = .literal_strip_left;
-                    return;
-                }
                 const rule = ParseRule(Self).get(self.current);
                 if (nprec > rule.precedence) {
                     break;

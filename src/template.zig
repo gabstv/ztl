@@ -301,6 +301,22 @@ test "Template: map global" {
     try testTemplate("hello 123", "<%= @a %> <%= @key_2 %>", globals);
 }
 
+test "Template: semicolon" {
+    try testTemplate("Simple1",
+        \\<% var x = "Simple1"; -%>
+        \\<%= x %>
+   , .{});
+
+    // allow semicolon to be omitted on a closing tag
+    try testTemplate("Simple2",
+        \\<% var x = "Simple2" -%>
+        \\<%= x %>
+   , .{});
+
+    try testTemplate("Simple3", "<%= `Simple3`; %>", .{});
+    try testTemplate("Simple4", "<%= `Simple4` %>", .{});
+}
+
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
     return testTemplateWithApp(void, expected, template, args);
 }

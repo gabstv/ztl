@@ -20,9 +20,9 @@ pub fn main() !void {
     // The templating language is erb-inspired
     template.compile(
         \\ <h2>Products</h2>
-        \\ <% foreach (@products) |product| { %>
+        \\ <% foreach (@products) |product| { -%>
         \\     <%= escape product["name"] %>
-        \\ <%- } %>
+        \\ <% } %>
     , .{.error_report = &error_report}) catch |err| {
         std.debug.print("{}\n", .{error_report});
         return err;

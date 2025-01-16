@@ -99,6 +99,10 @@ pub const Scanner = struct {
                         pos += 1;
                         return .{.MINUS_EQUAL = {}};
                     }
+                    if (self.at(pos) == '%' and self.at(pos + 1) == '>') {
+                        pos += 2;
+                        return .{.MINUS_PERCENT_GREATER = {}};
+                    }
                     return .{.MINUS = {}};
                 },
                 ':' => return .{.COLON = {}},
@@ -374,6 +378,7 @@ pub const Token = union(enum) {
     MINUS,
     MINUS_EQUAL,
     MINUS_MINUS,
+    MINUS_PERCENT_GREATER,
     NULL,
     OR,
     ORELSE,
@@ -432,6 +437,7 @@ pub const Token = union(enum) {
             .MINUS => return writer.writeAll("-"),
             .MINUS_EQUAL => return writer.writeAll("-="),
             .MINUS_MINUS => return writer.writeAll("--"),
+            .MINUS_PERCENT_GREATER => return writer.writeAll("-%>"),
             .NULL => return writer.writeAll("null"),
             .OR => return writer.writeAll("or"),
             .ORELSE => return writer.writeAll("orelse"),
