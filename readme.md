@@ -15,7 +15,7 @@ pub fn main() !void {
     var template = ztl.Template(void).init(allocator, {});
     defer template.deinit();
 
-    var error_report = ztl.CompileErrorReport{};
+    var compile_error_report = ztl.CompileErrorReport{};
 
     // The templating language is erb-inspired
     template.compile(
@@ -23,8 +23,8 @@ pub fn main() !void {
         \\ <% foreach (@products) |product| { -%>
         \\     <%= escape product["name"] %>
         \\ <% } %>
-    , .{.error_report = &error_report}) catch |err| {
-        std.debug.print("{}\n", .{error_report});
+    , .{.error_report = &compile_error_report}) catch |err| {
+        std.debug.print("{}\n", .{compile_error_report});
         return err;
     };
 
@@ -32,13 +32,19 @@ pub fn main() !void {
     var buf = std.ArrayList(u8).init(allocator);
     defer buf.deinit();
 
+    var render_error_report = ztl.RenderErrorReport{};
+
     // The render method is thread-safe.
-    try template.render(buf.writer(), .{
+    template.render(buf.writer(), .{
         .products = [_]Product{
             .{.name = "Keemun"},
             .{.name = "Silver Needle"},
         }
-    }, .{});
+    }, .{.error_report = &render_error_report}) catch |err| {
+        defer render_error_report.deinit();
+        std.debug.print("{}\n", .{render_error_report});
+        return err;
+    };
 
     std.debug.print("{s}\n", .{buf.items});
 }
@@ -58,9 +64,7 @@ By default, output is not escaped. You can use the `escape` keyword to apply bas
 <%= escape product["name"] %>
 ```
 
-Alternatively, you can set `ZtlConfig.escape_by_default` to true to have escape on by default. In this case the special "escape" is invalid, however the "safe" keyword can be used to output the value as-is.
-
-Variables passed into the `render` method must be prefixed with `@`.
+Alternatively, you can set `ZtlConfig.escape_by_default` to true to have escape on by default. In this case the special `escape` is invalid, however the `safe` keyword can be used to output the value as-is.
 
 The language supports the following types:
 * i64
@@ -168,15 +172,15 @@ template.compile("<% 1.invalid() %>", .{.error_report = &error_report}) catch |e
 };
 ```
 
-The `template.render` method is thread-safe. The general intention is that a template is compiled once, and rendered multiple times. The `render` method takes an optional `RenderOption` argument.
+The `template.render` method is thread-safe. The general intention is that a template is compiled once and rendered multiple times. The `render` method takes an optional `RenderOption` argument.
 
-The first optional field is `*ztl.RenderErorrReport`. When set, a description of the runtime error (yes, the error messages currently suck):
+The first optional field is `*ztl.RenderErorrReport`. When set, a description of the runtime error can be retreived. When set, you must call `deinit` on the error report on error:
 
 ```zig
 var error_report = ztl.RenderErrorReport{};
 template.render(buf.writer(), .{}, .{.error_report = &error_report}) catch |err| {
-    defer report.deinit();
-    std.debug.print("Runtime error {any} {s}\n", .{err, report.message});
+    defer error_report.deinit();
+    std.debug.print("Runtime error: {}\n", .{error_report});
 };
 ```
 

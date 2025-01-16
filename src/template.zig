@@ -99,6 +99,7 @@ pub fn Template(comptime App: type) type {
                 if (opts.error_report) |er| {
                     if (vm.err) |vm_err| {
                         er.* = .{
+                            .err = runtime_err,
                             .allocator = allocator,
                             .message = try allocator.dupe(u8, vm_err),
                         };
@@ -378,7 +379,7 @@ fn testTemplateRenderError(expected: []const u8, template: []const u8) !void {
     var buf = std.ArrayList(u8).init(t.allocator);
     defer buf.deinit();
 
-var report = RenderErrorReport{};
+    var report = RenderErrorReport{};
     tmpl.render(buf.writer(), .{}, .{ .error_report = &report }) catch {
         defer report.deinit();
         try t.expectString(expected, report.message);

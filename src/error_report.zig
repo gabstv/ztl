@@ -93,12 +93,24 @@ pub const Compile = struct {
 };
 
 pub const Render = struct {
+    err: ?anyerror = null,
     message: []const u8 = "",
     allocator: ?Allocator = null,
 
     pub fn deinit(self: Render) void {
         if (self.allocator) |a| {
             a.free(self.message);
+        }
+    }
+
+    pub fn format(self: *const Render, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        if (self.err) |se| {
+            try writer.writeAll(@errorName(se));
+            try writer.writeAll(" - ");
+        }
+
+        if (self.message.len > 0) {
+            try writer.writeAll(self.message);
         }
     }
 };
