@@ -244,12 +244,12 @@ pub fn Compiler(comptime A: type) type {
                         try self.advance();
                         const writer = &self.writer;
 
-                        if (try self.match(.PRINT)) {
-                            self.setError("Function 'print' reserved as built-in function");
-                            return error.ReservedFunction;
-                        }
                         try self.consume(.IDENTIFIER, "function name");
                         const name = self.previous.IDENTIFIER;
+                        if (name[0] == '@') {
+                            try self.setErrorFmt("Function name cannot begin with '@' ('{s}')", .{name});
+                            return error.ReservedFunction;
+                        }
                         if (CustomFunctionLookup.get(name) != null) {
                             try self.setErrorFmt("Function '{s}' reserved by custom application function", .{name});
                             return error.ReservedFunction;
@@ -698,13 +698,6 @@ pub fn Compiler(comptime A: type) type {
                     try self.consumeSemicolon();
                     try self.jumper.insertContinue(self, continue_count);
                 },
-                .PRINT => {
-                    try self.advance();
-                    try self.consume(.LEFT_PARENTHESIS, "left parenthesis ('(')");
-                    const arity = try self.parameterList(32);
-                    try self.consumeSemicolon();
-                    try writer.opWithData(.PRINT, &.{arity});
-                },
                 else => {
                     try self.expression();
                     try self.consumeSemicolon();
@@ -847,10 +840,22 @@ pub fn Compiler(comptime A: type) type {
         }
 
         fn identifier(self: *Self, can_assign: bool) Error!void {
-            if (self.current == .LEFT_PARENTHESIS) {
+            if (self.current != .LEFT_PARENTHESIS) {
+                return self.variable(can_assign);
+            }
+            const name = self.previous.IDENTIFIER;
+            if (name[0] != '@') {
                 return self.call();
             }
-            return self.variable(can_assign);
+
+            if (std.mem.eql(u8, name, "@print")) {
+                try self.consume(.LEFT_PARENTHESIS, "left parenthesis ('(')");
+                const arity = try self.parameterList(32);
+                return self.writer.opWithData(.PRINT, &.{arity});
+            } else {
+                try self.setErrorFmt("Unknown built-in function: {s}", .{name});
+                return error.UnknownBuiltin;
+            }
         }
 
         fn variable(self: *Self, can_assign: bool) Error!void {
@@ -1345,6 +1350,7 @@ pub const Error = error{
     InvalidIterableCount,
     UnexpectedEOF,
     Invalid,
+    UnknownBuiltin,
 } || @import("scanner.zig").Error;
 
 // For top-level functions we store a small function header in the bytecode's

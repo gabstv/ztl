@@ -313,7 +313,6 @@ pub const Scanner = struct {
             5 => switch (@as(u40, @bitCast(value[0..5].*))) {
                 asUint("false") => return .{.BOOLEAN = false},
                 asUint("while") => return .{.WHILE = {}},
-                asUint("print") => return .{.PRINT = {}},
                 asUint("break") => return .{.BREAK = {}},
                 else => {},
             },
@@ -385,7 +384,6 @@ pub const Token = union(enum) {
     PLUS,
     PLUS_EQUAL,
     PLUS_PLUS,
-    PRINT,
     QUESTION_MARK,
     RETURN,
     RIGHT_BRACE,
@@ -444,7 +442,6 @@ pub const Token = union(enum) {
             .PLUS => return writer.writeAll("+"),
             .PLUS_EQUAL => return writer.writeAll("+="),
             .PLUS_PLUS => return writer.writeAll("++"),
-            .PRINT => return writer.writeAll("print"),
             .QUESTION_MARK => return writer.writeAll("?"),
             .RETURN => return writer.writeAll("return"),
             .RIGHT_BRACE => return writer.writeAll("}"),

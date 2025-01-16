@@ -1365,7 +1365,7 @@ test "ztl: function custom" {
 
 test "ztl: function error" {
     try testError("Unknown function: 'flow'", "return flow();");
-    try testError("Function 'print' reserved as built-in function", "fn print(){}");
+    try testError("Function name cannot begin with '@'", "fn @print(){}");
 
     try testError("Function 'x' expects 0 parameters, but called with 1",
         \\ fn x() {}

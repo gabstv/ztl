@@ -133,7 +133,7 @@ for (list) |item| {
 ```
 
 There is 1 built-in function:
-* `print` - prints the value(s) to stderr
+* `@print` - prints the value(s) to stderr
 
 Developers can add their own Zig functions.
 
