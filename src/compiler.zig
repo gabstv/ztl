@@ -150,7 +150,7 @@ pub fn Compiler(comptime A: type) type {
             var it = self.functions.iterator();
             while (it.next()) |kv| {
                 if (kv.value_ptr.code_pos == null) {
-                    try self.setErrorFmt("Unknown function: '{s}'", .{kv.key_ptr.*});
+                    try self.setErrorFmt("Function '{s}' is unknown", .{kv.key_ptr.*});
                     return error.UnknownFunction;
                 }
             }
@@ -457,6 +457,7 @@ pub fn Compiler(comptime A: type) type {
                 self.setError("Unreachable code detected");
                 return error.UnreachableCode;
             }
+
             var writer = &self.writer;
             var jumper = &self.jumper;
             switch (self.current) {
@@ -464,7 +465,7 @@ pub fn Compiler(comptime A: type) type {
                     try self.advance();
                     try self.beginScope(true);
                     try self.block();
-                    try self.endScope(false);
+                    return self.endScope(false);
                 },
                 .IF => {
                     try self.advance();
@@ -480,10 +481,9 @@ pub fn Compiler(comptime A: type) type {
                         const jump_if_true = try jumper.forward(self, .JUMP);
                         try jump_if_false.goto();
                         try self.statement();
-                        try jump_if_true.goto();
-                    } else {
-                        try jump_if_false.goto();
+                        return jump_if_true.goto();
                     }
+                    return jump_if_false.goto();
                 },
                 .FOR => {
                     try self.advance();
@@ -551,8 +551,7 @@ pub fn Compiler(comptime A: type) type {
                     }
                     // any breaks we have registered for this loop will jump here
                     try breakable_scope.breakHere();
-
-                    try self.endScope(false);
+                    return self.endScope(false);
                 },
                 .FOREACH => {
                     try self.advance();
@@ -649,7 +648,7 @@ pub fn Compiler(comptime A: type) type {
 
                     _ = self.scopes.pop();
                     self.locals.items.len -= variable_count;
-                    try self.endScope(false);
+                    return self.endScope(false);
                 },
                 .WHILE => {
                     try self.advance();
@@ -669,7 +668,7 @@ pub fn Compiler(comptime A: type) type {
 
                     try jump_if_false.goto(); // if our condition is false, this is where we want to jump to
 
-                    try breakable_scope.breakHere();
+                    return breakable_scope.breakHere();
                 },
                 .RETURN => {
                     try self.advance();
@@ -681,6 +680,7 @@ pub fn Compiler(comptime A: type) type {
                         try writer.op(.RETURN);
                     }
                     scope.has_return = true;
+                    return;
                 },
                 .BREAK => {
                     try self.advance();
@@ -694,7 +694,7 @@ pub fn Compiler(comptime A: type) type {
                         break_count = @intCast(value);
                     }
                     try self.consumeSemicolon(true);
-                    try self.jumper.insertBreak(self, break_count);
+                    return self.jumper.insertBreak(self, break_count);
                 },
                 .CONTINUE => {
                     try self.advance();
@@ -708,14 +708,35 @@ pub fn Compiler(comptime A: type) type {
                         continue_count = @intCast(value);
                     }
                     try self.consumeSemicolon(true);
-                    try self.jumper.insertContinue(self, continue_count);
+                    return self.jumper.insertContinue(self, continue_count);
                 },
-                else => {
-                    try self.expression();
-                    try self.consumeSemicolon(true);
-                    try writer.pop();
+                .IDENTIFIER => |name| blk: {
+                    if (name[0] != '@' or self.scanner.peek() != .LEFT_PARENTHESIS) {
+                        // a normal expression
+                        break :blk;
+                    }
+
+                    // skip the identifier (we already have its name)
+                    try self.advance();
+
+                    // skip the left parenthesis
+                    try self.advance();
+
+                    // If we're here, we've already consumed the left parenthesis
+                    if (std.mem.eql(u8, name, "@print")) {
+                        const arity = try self.parameterList(32);
+                        try self.consumeSemicolon(true);
+                        return self.writer.opWithData(.PRINT, &.{arity});
+                    }
+                    try self.setErrorFmt("Function '{s}' is not a built-in function", .{name});
+                    return error.UnknownBuiltin;
                 },
+                else => {},
             }
+
+            try self.expression();
+            try self.consumeSemicolon(true);
+            try writer.pop();
         }
 
         fn block(self: *Self) Error!void {
@@ -851,22 +872,10 @@ pub fn Compiler(comptime A: type) type {
         }
 
         fn identifier(self: *Self, can_assign: bool) Error!void {
-            if (self.current != .LEFT_PARENTHESIS) {
-                return self.variable(can_assign);
-            }
-            const name = self.previous.IDENTIFIER;
-            if (name[0] != '@') {
+            if (self.current == .LEFT_PARENTHESIS) {
                 return self.call();
             }
-
-            if (std.mem.eql(u8, name, "@print")) {
-                try self.consume(.LEFT_PARENTHESIS, "left parenthesis ('(')");
-                const arity = try self.parameterList(32);
-                return self.writer.opWithData(.PRINT, &.{arity});
-            } else {
-                try self.setErrorFmt("Unknown built-in function: {s}", .{name});
-                return error.UnknownBuiltin;
-            }
+            return self.variable(can_assign);
         }
 
         fn variable(self: *Self, can_assign: bool) Error!void {
