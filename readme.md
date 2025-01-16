@@ -1,30 +1,47 @@
 # Zig Template Language
 
 ```zig
-var template = ztl.Template(void).init(allocator, {});
-defer template.deinit();
+const std = @import("std");
+const ztl = @import("ztl");
 
-// The templating language is erb-inspired
-try template.compile(
-    \\ <h2>Products</h2>
-    \\ <% foreach (@product) |product| { %>
-    \\     <%= escape product["name"] %> 
-    \\ <%- } %>
-, .{});
+const Product = struct {
+    name: []const u8,
+};
 
-// Write to any writer, here we're using an ArrayList
-var buf = std.ArrayList(u8).init(allocator);
-defer buf.deinit();
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
 
-// The render method is thread-safe.
-try template.render(buf.writer(), .{
-    .products = [_]Product{
-        .{.name = "Keemun"},
-        .{.name = "Silver Needle"},
-    }
-}, .{});
+    var template = ztl.Template(void).init(allocator, {});
+    defer template.deinit();
 
-std.debug.print("{s}\n", .{buf.items});
+    var error_report = ztl.CompileErrorReport{};
+
+    // The templating language is erb-inspired
+    template.compile(
+        \\ <h2>Products</h2>
+        \\ <% foreach (@products) |product| { %>
+        \\     <%= escape product["name"] %>
+        \\ <%- } %>
+    , .{.error_report = &error_report}) catch |err| {
+        std.debug.print("{}\n", .{error_report});
+        return err;
+    };
+
+    // Write to any writer, here we're using an ArrayList
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+
+    // The render method is thread-safe.
+    try template.render(buf.writer(), .{
+        .products = [_]Product{
+            .{.name = "Keemun"},
+            .{.name = "Silver Needle"},
+        }
+    }, .{});
+
+    std.debug.print("{s}\n", .{buf.items});
+}
 ```
 
 ## Project Status
