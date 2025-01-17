@@ -111,8 +111,8 @@ pub fn Compiler(comptime A: type) type {
                 .jumper = Jumper(App).init(allocator),
                 .writer = try ByteCode(App).init(allocator),
                 .error_pos = 0,
-                .current = .{ .START = {} },
-                .previous = .{ .START = {} },
+                .current = .{ .BOF = {} },
+                .previous = .{ .BOF = {} },
             };
         }
 
