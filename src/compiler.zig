@@ -1732,7 +1732,7 @@ test "tests:afterEach" {
     t.reset();
 }
 
-test "compiler: local limit" {
+test "Compiler: local limit" {
     defer t.reset();
 
     const App = struct {
@@ -1756,7 +1756,7 @@ test "compiler: local limit" {
     );
 }
 
-test "compiler: arithmetic" {
+test "Compiler: arithmetic" {
     try testReturnValue(.{ .i64 = 9 }, "return 1 + 8;");
     try testReturnValue(.{ .i64 = -1 }, "return 10 - 11;");
     try testReturnValue(.{ .i64 = 14 }, "return 2 * 7;");
@@ -1780,12 +1780,12 @@ test "compiler: arithmetic" {
     try testReturnValue(.{ .f64 = 0.7843137254901962 }, "return 4 / 5.1;");
 }
 
-test "compiler: not" {
+test "Compiler: not" {
     try testReturnValue(.{ .bool = true }, "return !false;");
     try testReturnValue(.{ .bool = false }, "return !true;");
 }
 
-test "compiler: comparison int" {
+test "Compiler: comparison int" {
     try testReturnValue(.{ .bool = true }, "return 1 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1 == 2;");
     try testReturnValue(.{ .bool = false }, "return 1 != 1;");
@@ -1808,7 +1808,7 @@ test "compiler: comparison int" {
     try testReturnValue(.{ .bool = false }, "return 2 <= 1;");
 }
 
-test "compiler: comparison float" {
+test "Compiler: comparison float" {
     try testReturnValue(.{ .bool = true }, "return 1.13 == 1.13;");
     try testReturnValue(.{ .bool = false }, "return 1.13 == 2.08;");
     try testReturnValue(.{ .bool = false }, "return 1.13 != 1.13;");
@@ -1831,7 +1831,7 @@ test "compiler: comparison float" {
     try testReturnValue(.{ .bool = false }, "return 2.08 <= 1.13;");
 }
 
-test "compiler: comparison int - float" {
+test "Compiler: comparison int - float" {
     try testReturnValue(.{ .bool = true }, "return 1 == 1.0;");
     try testReturnValue(.{ .bool = false }, "return 1 == 1.1;");
     try testReturnValue(.{ .bool = false }, "return 1 != 1.0;");
@@ -1854,7 +1854,7 @@ test "compiler: comparison int - float" {
     try testReturnValue(.{ .bool = false }, "return 2 <= 1.99;");
 }
 
-test "compiler: comparison float - int" {
+test "Compiler: comparison float - int" {
     try testReturnValue(.{ .bool = true }, "return 1.0 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1.1 == 1;");
     try testReturnValue(.{ .bool = false }, "return 1.0 != 1;");
@@ -1877,7 +1877,7 @@ test "compiler: comparison float - int" {
     try testReturnValue(.{ .bool = false }, "return 10.1 <= 10;");
 }
 
-test "compiler: comparison bool" {
+test "Compiler: comparison bool" {
     try testReturnValue(.{ .bool = true }, "return true == true;");
     try testReturnValue(.{ .bool = true }, "return false == false;");
     try testReturnValue(.{ .bool = false }, "return true == false;");
@@ -1889,7 +1889,7 @@ test "compiler: comparison bool" {
     try testReturnValue(.{ .bool = true }, "return false != true;");
 }
 
-test "compiler: comparison null" {
+test "Compiler: comparison null" {
     try testReturnValue(.{ .bool = true }, "return null == null;");
     try testReturnValue(.{ .bool = false }, "return null != null;");
 
@@ -1912,7 +1912,7 @@ test "compiler: comparison null" {
     try testReturnValue(.{ .bool = true }, "return false != null;");
 }
 
-test "compiler: comparison string" {
+test "Compiler: comparison string" {
     try testReturnValue(.{ .bool = true }, "return `abc` == `abc`;");
     try testReturnValue(.{ .bool = false }, "return `abc` == `123`;");
     try testReturnValue(.{ .bool = false }, "return `abc` == `ABC`;");
@@ -1937,14 +1937,14 @@ test "compiler: comparison string" {
     try testReturnValue(.{ .bool = false }, "return `ABC` >= `abc`;");
 }
 
-test "compiler: comparison list" {
+test "Compiler: comparison list" {
     try testReturnValue(.{ .bool = true }, "return [] == [];");
     try testReturnValue(.{ .bool = true }, "return [1] == [1];");
     try testReturnValue(.{ .bool = false }, "return [1] == [1,``];");
     try testReturnValue(.{ .bool = false }, "return [] == null;");
 }
 
-test "compiler: comparison map" {
+test "Compiler: comparison map" {
     try testReturnValue(.{ .bool = true }, "return %{} == %{};");
     try testReturnValue(.{ .bool = true }, "return %{a:1} == %{a: 1};");
     try testReturnValue(.{ .bool = true }, "return %{a:1, 123: `a`} == %{123: `a`, a: 1};");
@@ -1952,7 +1952,7 @@ test "compiler: comparison map" {
     try testReturnValue(.{ .bool = false }, "return %{} == null;");
 }
 
-test "compiler: increment/decrement" {
+test "Compiler: increment/decrement" {
     try testReturnValue(.{ .i64 = 4 },
         \\ var i = 0;
         \\ i++;
@@ -1994,7 +1994,7 @@ test "compiler: increment/decrement" {
     try testError("Expected semicolon (';'), got ++ (PLUS_PLUS)", "return 100++;");
 }
 
-test "compiler: variables" {
+test "Compiler: variables" {
     try testReturnValue(.{ .string = "Leto" },
         \\ var name = `Leto`;
         \\ return name;
@@ -2044,7 +2044,7 @@ test "compiler: variables" {
     try testError("IdentifierTooLong", "var " ++ "a" ** 128 ++ " = null;");
 }
 
-test "compiler: if" {
+test "Compiler: if" {
     try testReturnValue(.{ .i64 = 1234 },
         \\ if (true) {
         \\   return 1234;
@@ -2106,7 +2106,7 @@ test "compiler: if" {
     );
 }
 
-test "compiler: logical operators" {
+test "Compiler: logical operators" {
     try testReturnValue(.{ .bool = false }, "return 1 == 1 and 3 == 2;");
     try testReturnValue(.{ .bool = false }, "return 0 == 1 and 3 == 2;");
     try testReturnValue(.{ .bool = false }, "return 1 == 3 or 3 == 4;");
@@ -2116,7 +2116,7 @@ test "compiler: logical operators" {
     try testReturnValue(.{ .bool = false }, "return 1 == 3 and (3 == 4 or 4 == 4);");
 }
 
-test "compiler: while" {
+test "Compiler: while" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var i = 0;
         \\ while (i < 10) {
@@ -2134,7 +2134,7 @@ test "compiler: while" {
     );
 }
 
-test "compiler: for" {
+test "Compiler: for" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var i = 0;
         \\ for (var x = 0; x < 10; x = x + 1) {
@@ -2186,11 +2186,11 @@ test "compiler: for" {
     );
 }
 
-test "compiler: empty scope" {
+test "Compiler: empty scope" {
     try testReturnValue(.{ .null = {} }, "{} return null;"); // doesn't crash, yay!
 }
 
-test "compiler: variable scopes" {
+test "Compiler: variable scopes" {
     try testReturnValue(.{ .i64 = 100 },
         \\ var i = 0;
         \\ var count = 0;
@@ -2206,7 +2206,7 @@ test "compiler: variable scopes" {
     );
 }
 
-test "compiler: list initialization" {
+test "Compiler: list initialization" {
     {
         try testReturnValue(t.createListRef(&.{}), "return [];");
     }
@@ -2234,7 +2234,7 @@ test "compiler: list initialization" {
     }
 }
 
-test "compiler: list indexing" {
+test "Compiler: list indexing" {
     try testReturnValue(.{ .i64 = 10 }, "return [10, 2002, 5][0];");
     try testReturnValue(.{ .i64 = 2002 }, "return [10, 2002, 5][1];");
     try testReturnValue(.{ .i64 = 5 }, "return [10, 2002, 5][2];");
@@ -2249,7 +2249,7 @@ test "compiler: list indexing" {
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return [1,2][-3];");
 }
 
-test "compiler: list assignment" {
+test "Compiler: list assignment" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var arr = [0];
         \\ arr[0] = 10;
@@ -2337,7 +2337,7 @@ test "compiler: list assignment" {
     try testRuntimeError("Index out of range. Index: -2, Len: 1", "[1][-2] = 1;");
 }
 
-test "compiler: map initialization" {
+test "Compiler: map initialization" {
     {
         try testReturnValue(t.createMapRef(&.{}, &.{}), "return %{};");
     }
@@ -2367,7 +2367,7 @@ test "compiler: map initialization" {
     }
 }
 
-test "compiler: map indexing" {
+test "Compiler: map indexing" {
     try testReturnValue(.{ .i64 = 1 }, "return %{a: 1}[`a`];");
     try testReturnValue(.{ .null = {} }, "return %{a: 1}[`b`];");
     try testReturnValue(.{ .null = {} }, "return %{a: 1}[123];");
@@ -2381,7 +2381,7 @@ test "compiler: map indexing" {
     );
 }
 
-test "compiler: map assignment" {
+test "Compiler: map assignment" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var map = %{0: 2};
         \\ map[0] = 10;
@@ -2440,7 +2440,7 @@ test "compiler: map assignment" {
     );
 }
 
-test "compiler: string indexing" {
+test "Compiler: string indexing" {
     try testReturnValue(.{ .string = "a" }, "return `abc`[0];");
     try testReturnValue(.{ .string = "b" }, "return `abc`[1];");
     try testReturnValue(.{ .string = "c" }, "return `abc`[2];");
@@ -2455,7 +2455,7 @@ test "compiler: string indexing" {
     try testRuntimeError("Index out of range. Index: -3, Len: 2", "return `ab`[-3];");
 }
 
-test "compiler: invalid type indexing" {
+test "Compiler: invalid type indexing" {
     try testRuntimeError("Cannot index an integer", "return 0[0];");
     try testRuntimeError("Cannot index a float", "return 12.3[-1];");
     try testRuntimeError("Cannot index a boolean", "return true[0];");
@@ -2468,7 +2468,7 @@ test "compiler: invalid type indexing" {
     try testRuntimeError("Invalid index or property type, got a list", "return [][[]];");
 }
 
-test "compiler: orelse" {
+test "Compiler: orelse" {
     try testReturnValue(.{ .i64 = 4 }, "return 4 orelse 1;");
     try testReturnValue(.{ .i64 = 2 }, "return null orelse 2;");
     try testReturnValue(.{ .i64 = 3 }, "return null orelse 2+1;");
@@ -2476,7 +2476,7 @@ test "compiler: orelse" {
     try testReturnValue(.{ .i64 = 1 }, "return 1 orelse null orelse null orelse `hi`;");
 }
 
-test "compiler: string dedupe" {
+test "Compiler: string dedupe" {
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const deduplicate_string_literals = true;
@@ -2498,7 +2498,7 @@ test "compiler: string dedupe" {
     );
 }
 
-test "compiler: break while" {
+test "Compiler: break while" {
     try testReturnValue(.{ .i64 = 4 },
         \\ var i = 0;
         \\ while (i < 10) {
@@ -2551,7 +2551,7 @@ test "compiler: break while" {
     );
 }
 
-test "compiler: break for" {
+test "Compiler: break for" {
     try testReturnValue(.{ .i64 = 4 },
         \\ var i = 0;
         \\ for (; i < 10; i++) {
@@ -2589,7 +2589,7 @@ test "compiler: break for" {
     );
 }
 
-test "compiler: break foreach" {
+test "Compiler: break foreach" {
     try testReturnValue(.{ .i64 = 10 },
         \\ var count = 0;
         \\ var arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -2627,7 +2627,7 @@ test "compiler: break foreach" {
     );
 }
 
-test "compiler: continue while" {
+test "Compiler: continue while" {
     try testReturnValue(.{ .i64 = 5 },
         \\ var i = 0;
         \\ var count = 0;
@@ -2672,7 +2672,7 @@ test "compiler: continue while" {
     );
 }
 
-test "compiler: continue for" {
+test "Compiler: continue for" {
     try testReturnValue(.{ .i64 = 15 },
         \\ var count = 0;
         \\ for (var i = 0; i < 10; i++) {
@@ -2716,7 +2716,7 @@ test "compiler: continue for" {
     );
 }
 
-test "compiler: continue foreach" {
+test "Compiler: continue foreach" {
     try testReturnValue(.{ .i64 = 50 },
         \\ var count = 0;
         \\ var arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -2754,7 +2754,7 @@ test "compiler: continue foreach" {
     );
 }
 
-test "compiler: break invalid" {
+test "Compiler: break invalid" {
     try testError("'break' cannot be used outside of loop", "break;");
 
     try testError("'break' cannot be used outside of loop",
@@ -2780,7 +2780,7 @@ test "compiler: break invalid" {
     );
 }
 
-test "compiler: continue invalid" {
+test "Compiler: continue invalid" {
     try testError("'continue' cannot be used outside of loop", "continue;");
 
     try testError("'continue' cannot be used outside of loop",
@@ -2806,7 +2806,7 @@ test "compiler: continue invalid" {
     );
 }
 
-test "compiler: ternary" {
+test "Compiler: ternary" {
     try testReturnValue(.{ .i64 = 1 }, "return true ? 1 : 10;");
     try testReturnValue(.{ .i64 = 10 }, "return false ? 1 : 10;");
 
@@ -2823,7 +2823,7 @@ test "compiler: ternary" {
     );
 }
 
-test "compiler: list references" {
+test "Compiler: list references" {
     try testReturnValue(.{ .i64 = 9 },
         \\ var total = [1];
         \\ {
@@ -2834,7 +2834,7 @@ test "compiler: list references" {
     );
 }
 
-test "compiler: foreach" {
+test "Compiler: foreach" {
     try testReturnValue(.{ .i64 = 5 },
         \\ var total = 5;
         \\ foreach([]) |item| {
@@ -2914,7 +2914,7 @@ test "compiler: foreach" {
     );
 }
 
-test "compiler: stack overflow" {
+test "Compiler: stack overflow" {
     try testRuntimeError("Maximum call depth (255) reached",
         \\ fn overflow() {
         \\   overflow();
@@ -2923,7 +2923,7 @@ test "compiler: stack overflow" {
     );
 }
 
-test "compiler: ztl functions" {
+test "Compiler: ztl functions" {
     try testError("IdentifierTooLong", "fn " ++ "x" ** 128 ++ "(){}");
 
     try testError("Unreachable code detected",
@@ -3012,7 +3012,7 @@ test "compiler: ztl functions" {
     );
 }
 
-test "compiler: function custom" {
+test "Compiler: function custom" {
     const App = struct {
         id: i64,
 
@@ -3038,7 +3038,7 @@ test "compiler: function custom" {
     try testErrorWithApp(*App, "Function 'double' expects 1 parameter, but called with 2", "return double(2, 4));");
 }
 
-test "compiler: function error" {
+test "Compiler: function error" {
     try testError("Function 'flow' is unknown", "return flow();");
     try testError("Function name cannot begin with '@'", "fn @print(){}");
 
@@ -3053,32 +3053,32 @@ test "compiler: function error" {
     );
 }
 
-test "compiler: properties" {
+test "Compiler: properties" {
     try testReturnValue(.{ .i64 = 0 }, "return [].len;");
     try testReturnValue(.{ .i64 = 3 }, "return [1,10,100].len;");
     try testReturnValue(.{ .i64 = 0 }, "return %{}.len;");
     try testReturnValue(.{ .i64 = 1 }, "return %{a: 2}.len;");
 }
 
-test "compiler: method errors" {
+test "Compiler: method errors" {
     try testError("xx' is not a valid method", "return [].xx()");
 }
 
-test "compiler: method last" {
+test "Compiler: method last" {
     try testError("Function 'last' expects 0 parameters, but called with 1", "return [].last(1)");
 
     try testReturnValue(.{ .null = {} }, "return [].last();");
     try testReturnValue(.{ .i64 = 20 }, "return [1,20].last();");
 }
 
-test "compiler: method first" {
+test "Compiler: method first" {
     try testError("Function 'first' expects 0 parameters, but called with 2", "return [].first(`a`, true)");
 
     try testReturnValue(.{ .null = {} }, "return [].first();");
     try testReturnValue(.{ .i64 = 99 }, "return [99,2].first();");
 }
 
-test "compiler: method pop" {
+test "Compiler: method pop" {
     try testError("Function 'pop' expects 0 parameters, but called with 1", "return [].pop(null)");
 
     try testReturnValue(.{ .null = {} }, "return [].pop();");
@@ -3089,7 +3089,7 @@ test "compiler: method pop" {
     );
 }
 
-test "compiler: method remove" {
+test "Compiler: method remove" {
     try testError("Function 'remove' expects 1 parameter, but called with 0", "return [].remove()");
     try testError("Function 'remove' expects 1 parameter, but called with 2", "return %{}.remove(true, false)");
 
@@ -3115,7 +3115,7 @@ test "compiler: method remove" {
     );
 }
 
-test "compiler: method removeAt" {
+test "Compiler: method removeAt" {
     try testError("Function 'removeAt' expects 1 parameter, but called with 0", "return [].removeAt()");
     try testRuntimeError("Index out of range. Index: 0, Len: 0", "return [].removeAt(0);");
 
@@ -3132,7 +3132,7 @@ test "compiler: method removeAt" {
     );
 }
 
-test "compiler: method append" {
+test "Compiler: method append" {
     try testError("Function 'append' expects 1 parameter, but called with 0", "return [].append()");
 
     try testReturnValue(.{ .i64 = 4 },
@@ -3164,7 +3164,7 @@ test "compiler: method append" {
     }
 }
 
-test "compiler: method contains" {
+test "Compiler: method contains" {
     try testError("Function 'contains' expects 1 parameter, but called with 0", "return [].contains();");
     try testRuntimeError("Map key must be an integer or string, got a boolean", "return %{}.contains(true);");
 
@@ -3185,7 +3185,7 @@ test "compiler: method contains" {
     try testReturnValue(.{ .bool = false }, "return %{abc: 1, def: 2}.contains(`ABC`);");
 }
 
-test "compiler: method indexOf" {
+test "Compiler: method indexOf" {
     try testError("Function 'indexOf' expects 1 parameter, but called with 0", "return [].indexOf()");
     try testRuntimeError("Unknown method 'indexOf' for a map", "return %{}.indexOf(1);");
 
@@ -3198,7 +3198,7 @@ test "compiler: method indexOf" {
     try testReturnValue(.{ .null = {} }, "return [`aa`, `BB`].indexOf(`AA`);");
 }
 
-test "compiler: method sort" {
+test "Compiler: method sort" {
     try testError("Function 'sort' expects 0 parameters, but called with 2", "return [].sort(true, false)");
     try testRuntimeError("Unknown method 'sort' for a boolean", "return true.sort();");
 
@@ -3224,7 +3224,7 @@ test "compiler: method sort" {
     }
 }
 
-test "compiler: method concat" {
+test "Compiler: method concat" {
     try testError("Function 'concat' expects 1 parameter, but called with 2", "return [].concat(true, false)");
 
     {

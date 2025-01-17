@@ -318,6 +318,15 @@ test "Template: semicolon" {
     try testTemplate("Simple4", "<%= `Simple4` %>", .{});
 }
 
+test "Template: global in function" {
+    try testTemplate("7",
+        \\<% fn add(n) {
+        \\   return @count + n;
+        \\ } %>
+        \\<%-= add(3) %>
+   , .{.count = 4});
+}
+
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
     return testTemplateWithApp(void, expected, template, args);
 }
