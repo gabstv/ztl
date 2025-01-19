@@ -14,8 +14,13 @@ const OpCode = @import("byte_code.zig").OpCode;
 const ByteCode = @import("byte_code.zig").ByteCode;
 const ErrorReport = @import("error_report.zig").Compile;
 
-const CompileOpts = struct {
+pub const Opts = struct {
+    key: []const u8 = "",
     error_report: ?*ErrorReport = null,
+};
+
+pub const PartialResult = union(enum) {
+    src: []const u8,
 };
 
 pub fn Compiler(comptime A: type) type {
@@ -25,6 +30,25 @@ pub fn Compiler(comptime A: type) type {
         .void => void,
         else => @compileError("Template App must be a struct, got: " ++ @tagName(@typeInfo(A))),
     };
+
+    if (std.meta.hasMethod(App, "partial")) {
+        const partial_fn = @typeInfo(@TypeOf(App.partial)).@"fn";
+        const params = partial_fn.params;
+
+        const valid_parameters = blk: {
+            if (params.len == 4) {
+                break :blk  params[0].type.? == A and
+                            params[1].type.? == Allocator and
+                            params[2].type.? == []const u8 and
+                            params[3].type.? == []const u8;
+            }
+            break :blk false;
+        };
+
+        if (valid_parameters == false) {
+            @compileError("The " ++ @typeName(App) ++ ".partial() method must have the following signature:\npub fn partial(self: @This(), template_key: []const u8, include_key: []const u8) !?PartialResult");
+        }
+    }
 
     const MAX_LOCALS = config.extract(App, "max_locals");
     const ESCAPE_BY_DEFAULT = config.extract(App, "escape_by_default");
@@ -52,7 +76,7 @@ pub fn Compiler(comptime A: type) type {
         mode: Mode,
 
         // the ByteCode that our compiler is generating
-        writer: ByteCode(App),
+        writer: ByteCode(A),
 
         // Arena for memory that can be discarded after compilation. This arena, and
         // its allocator, are NOT used for anything to do with byte code generation.
@@ -67,6 +91,11 @@ pub fn Compiler(comptime A: type) type {
         current: Token,
         previous: Token,
         error_pos: u32,
+
+        // a stack of includes, used to track restoring the compiler/scanner state
+        // after the include is included, as well as the src/name of the include
+        // for error reporting purposes
+        includes: std.ArrayListUnmanaged(Include),
 
         functions: std.StringHashMapUnmanaged(Function),
         function_calls: std.ArrayListUnmanaged(Function.Call),
@@ -85,7 +114,10 @@ pub fn Compiler(comptime A: type) type {
 
         // Jumping is one of the messier parts of the code. So we try to put as
         // much of the logic into its own struct.
-        jumper: Jumper(App),
+        jumper: Jumper(A),
+
+        app: A,
+        opts: Opts,
 
         const Self = @This();
 
@@ -97,27 +129,30 @@ pub fn Compiler(comptime A: type) type {
         };
 
         // we expect allocator to be an arena
-        pub fn init(allocator: Allocator) !Self {
+        pub fn init(allocator: Allocator, app: A, opts: Opts,) !Self {
             return .{
+                .app = app,
                 .err = null,
+                .opts = opts,
                 .scopes = .{},
                 .locals = .{},
                 .globals = .{},
+                .includes = .{},
                 .functions = .{},
                 .mode = .literal,
                 .arena = allocator,
                 .function_calls = .{},
                 .string_literals = .{},
-                .jumper = Jumper(App).init(allocator),
-                .writer = try ByteCode(App).init(allocator),
+                .jumper = Jumper(A).init(allocator),
+                .writer = try ByteCode(A).init(allocator),
                 .error_pos = 0,
                 .current = .{ .BOF = {} },
                 .previous = .{ .BOF = {} },
             };
         }
 
-        pub fn compile(self: *Self, src: []const u8, opts: CompileOpts) Error!void {
-            errdefer |err| if (opts.error_report) |er| {
+        pub fn compile(self: *Self, src: []const u8) Error!void {
+            errdefer |err| if (self.opts.error_report) |er| {
                 var msg = self.err;
                 if (msg == null) {
                     if (err == error.UnexpectedCharacter) {
@@ -125,11 +160,19 @@ pub fn Compiler(comptime A: type) type {
                     }
                 }
 
+                var src_of_err = src;
+                var include_key: ?[]const u8 = null;
+                if (self.includes.getLastOrNull()) |include| {
+                    src_of_err = include.src;
+                    include_key = include.key;
+                }
+
                 er.* = .{
-                    .src = src,
                     .err = err,
+                    .src = src_of_err,
                     .pos = self.error_pos,
                     .message = msg orelse "",
+                    .include_key = include_key,
                 };
             };
             var writer = &self.writer;
@@ -506,7 +549,7 @@ pub fn Compiler(comptime A: type) type {
 
                     // if we have a condition, we'll need to jump to the end of
                     // the for loop if/when it becomes false.
-                    var jump_loop_false: ?Jumper(App).Forward = null;
+                    var jump_loop_false: ?Jumper(A).Forward = null;
                     if (try self.match(.SEMICOLON) == false) {
                         // we have a condition!
                         try self.expression();
@@ -727,6 +770,88 @@ pub fn Compiler(comptime A: type) type {
                         const arity = try self.parameterList(32);
                         try self.consumeSemicolon(true);
                         return self.writer.opWithData(.PRINT, &.{arity});
+                    }
+
+                    if (std.mem.eql(u8, name, "@include")) {
+                        // @include is complicated.
+                        // We turn the contents of the included file into a function.
+                        // Which lets us "include" the file just by issuing a CALL
+                        // like any other function.
+                        // But, we have to handle a few things differently:
+
+                        // 1) Our self.scanner doesn't know anything about this
+                        // included code. So we have to "pause" the current
+                        // compilation, load the included src, compile it, and
+                        // then restore/resume the original code.
+                        //
+                        // 2) We need to translate globals within the include
+                        // to local hash gets.
+
+
+                        if (std.meta.hasMethod(App, "partial") == false) {
+                            self.setError(@typeName(App) ++ " dot not have a 'partial' method. @include cannot be used");
+                            return error.PartialsNotConfigured;
+                        }
+
+                       const include_key = switch (self.current) {
+                            .STRING => |str| str,
+                            else => {
+                                try self.setExpectationError("partial name (a string literal)");
+                                return error.Invalid;
+                            }
+                        };
+
+                        try self.advance();
+                        // TODO parameter list
+                        try self.consume(.RIGHT_PARENTHESIS, "Expected closing parenthesis ')'");
+                        try self.consumeSemicolon(true);
+
+                        // We give the include a unique function name. Since user-defined functions
+                        // can't begin with '@', this won't conflict.
+                        const include_fn_name = try std.fmt.allocPrint(self.arena, "@include {s}", .{include_key});
+
+                        const gop = try self.functions.getOrPut(self.arena, include_fn_name);
+                        if (gop.found_existing) {
+                            // unlikely, but this file has already been included. So there isn't anything
+                            // more to do but to call it.
+                            return self.writer.opWithData(.CALL, std.mem.asBytes(&gop.value_ptr.data_pos));
+                        }
+
+                        // Ask the app for the include source
+                        const result = self.app.partial(self.arena, self.opts.key, include_key) catch |err| {
+                            try self.setErrorFmt("Failed to load partial: '{s}'. Load Error: {}", .{include_key, err});
+                            return error.PartialLoadError;
+                        } orelse {
+                            try self.setErrorFmt("Unknown partial: '{s}'", .{include_key});
+                            return error.PartialUnknown;
+                        };
+
+                        // This kind of resets our compiler and scanner to now
+                        // parse the included src. It captures the current state
+                        // so that it can be restored once we're done.
+                        try self.beginInclude(include_key, result.src);
+
+                        try self.beginScope(false);
+                        gop.value_ptr.* = try self.newFunction(include_fn_name);
+                        try writer.beginFunction(include_fn_name);
+
+                        while (self.current != .EOF) {
+                            try self.declaration();
+                        }
+                        try writer.null();
+                        try writer.op(.RETURN);
+
+                        // do not defer this.
+                        // We won't want this to be called on error, since we
+                        // want to self.includes to contain our include so that
+                        // we can report a better error
+                        self.endInclude();
+
+                        gop.value_ptr.arity = 0;
+                        gop.value_ptr.code_pos = try writer.endFunction(gop.value_ptr.data_pos, 0);
+
+                        try self.endScope(true);
+                        return self.writer.opWithData(.CALL, std.mem.asBytes(&gop.value_ptr.data_pos));
                     }
                     try self.setErrorFmt("Function '{s}' is not a built-in function", .{name});
                     return error.UnknownBuiltin;
@@ -1052,6 +1177,16 @@ pub fn Compiler(comptime A: type) type {
 
         fn call(self: *Self) Error!void {
             const name = self.previous.IDENTIFIER;
+            if (name[0] == '@') blk: {
+                const builtins_with_return: []const []const u8 = &.{};
+                for (builtins_with_return) |allowed| {
+                    if (std.mem.eql(u8, name, allowed)) {
+                        break :blk;
+                    }
+                }
+                try self.setErrorFmt("Builtin function '{s}' does not produce a value", .{name});
+                return error.BuiltinNotAnExpression;
+            }
 
             try self.advance(); // consume '(
 
@@ -1068,7 +1203,6 @@ pub fn Compiler(comptime A: type) type {
                 return self.writer.opWithData(.CALL_ZIG, &buf);
             }
 
-            // TODO: check arity (assuming we've declared the function)
             const gop = try self.functions.getOrPut(self.arena, name);
             if (gop.found_existing == false) {
                 gop.value_ptr.* = try self.newFunction(name);
@@ -1305,6 +1439,43 @@ pub fn Compiler(comptime A: type) type {
             return locals.len;
         }
 
+        // @includes are complicated. They're mostly handled like a function, but
+        // within an almost-new compiler instance. Specifically, we need the
+        // scanner to start iterating through the included src, which isn't part
+        // of the original source we currently have.
+        // This code "snapshots" the current state of the compiler and scanner
+        // saving it in the `self.includes` arraylist (which acts like a stack).
+        // It then sets the current state as-if we're parsing new code (the included
+        // source).
+        // When we're done, we'll call `endInclude` to pop this state off our
+        // `self.includes` stack and restore it.
+        // Some of this is also being tracked to try and report better errors
+        // if they happen within the include.
+        fn beginInclude(self: *Self, include_key: []const u8, src: []const u8) !void {
+            try self.includes.append(self.arena, .{
+                .src = src,
+                .key = include_key,
+                .restore_src = self.scanner.src,
+                .restore_pos = self.scanner.pos,
+                .restore_current = self.current,
+                .restore_previous = self.previous,
+            });
+
+            self.scanner.reset(src);
+            self.mode = .literal;
+            self.previous = .{.BOF = {}};
+            self.current = .{.BOF = {}};
+        }
+
+        fn endInclude(self: *Self) void {
+            const include = self.includes.pop();
+            self.mode = .code;
+            self.scanner.src = include.restore_src;
+            self.scanner.pos = include.restore_pos;
+            self.current = include.restore_current;
+            self.previous = include.restore_previous;
+        }
+
         fn parameterList(self: *Self, max_arity: u8) !u8 {
             if (try self.match(.RIGHT_PARENTHESIS)) {
                 return 0;
@@ -1371,6 +1542,10 @@ pub const Error = error{
     UnexpectedEOF,
     Invalid,
     UnknownBuiltin,
+    BuiltinNotAnExpression,
+    PartialsNotConfigured,
+    PartialLoadError,
+    PartialUnknown,
 } || @import("scanner.zig").Error;
 
 // For top-level functions we store a small function header in the bytecode's
@@ -1404,6 +1579,20 @@ const Function = struct {
 const CustomFunctionMeta = struct {
     arity: u8,
     function_id: u16,
+};
+
+const Include = struct {
+    // When the include ends, all the things we need to restore
+    restore_src: []const u8,
+    restore_pos: u32,
+    restore_current: Token,
+    restore_previous: Token,
+
+    // the include key
+    key: []const u8,
+
+    // the include source
+    src: []const u8,
 };
 
 // The messiest thing our compiler does is deal with JUMP (and its variants).
@@ -1741,7 +1930,7 @@ test "Compiler: local limit" {
         };
     };
 
-    try testErrorWithApp(App, "Maximum number of local variable (3) exceeded",
+    try testErrorWithApp(App, .{}, "Maximum number of local variable (3) exceeded",
         \\ var a = 1;
         \\ var b = 1;
         \\ var c = 1;
@@ -3033,9 +3222,9 @@ test "Compiler: function custom" {
     var app = App{ .id = 200 };
     try testReturnValueWithApp(*App, &app, .{ .i64 = 1204 }, "return add(1000, double(2));");
 
-    try testErrorWithApp(*App, "Function 'add' reserved by custom application function", "fn add(){}");
-    try testErrorWithApp(*App, "Function 'add' expects 2 parameters, but called with 0", "return add());");
-    try testErrorWithApp(*App, "Function 'double' expects 1 parameter, but called with 2", "return double(2, 4));");
+    try testErrorWithApp(*App, &app, "Function 'add' reserved by custom application function", "fn add(){}");
+    try testErrorWithApp(*App, &app, "Function 'add' expects 2 parameters, but called with 0", "return add());");
+    try testErrorWithApp(*App, &app, "Function 'double' expects 1 parameter, but called with 2", "return double(2, 4));");
 }
 
 test "Compiler: function error" {
@@ -3317,6 +3506,56 @@ test "Compiler: method concat" {
     }
 }
 
+test "Compiler: partial" {
+    const App = struct {
+        pub const ZtlConfig = struct {
+            pub const debug = ztl.DebugMode.full;
+        };
+
+        pub fn partial(self: @This(), _: Allocator, template_key: []const u8, include_key: []const u8) !?PartialResult {
+            _ = self;
+            _ = template_key;
+
+            if (std.mem.eql(u8, include_key, "fail")) {
+                return error.SomeError;
+            }
+
+            if (std.mem.eql(u8, include_key, "404")) {
+                return null;
+            }
+
+            if (std.mem.eql(u8, include_key, "incl_dbl")) {
+                return .{
+                    .src = \\<% fn dbl(a) { return a * 2; } %>
+                };
+            }
+
+            return null;
+        }
+    };
+
+    try testErrorWithApp(App, .{}, "PartialUnknown - Unknown partial: 'unknown'",
+        \\ @include("unknown");
+    );
+
+    try testErrorWithApp(App, .{}, "PartialLoadError - Failed to load partial: 'fail'. Load Error: error.SomeError",
+        \\ @include("fail");
+    );
+
+    try testErrorWithApp(App, .{}, "PartialUnknown - Unknown partial: '404'",
+        \\ @include("404");
+    );
+
+    try testErrorWithApp(App, .{}, "BuiltinNotAnExpression - Builtin function '@include' does not produce a value",
+        \\ return @include("incl_1");
+    );
+
+    try testReturnValueWithApp(App, .{}, .{.i64 = 12350},
+        \\ @include("incl_dbl");
+        \\ return dbl(6175);
+    );
+}
+
 fn testReturnValue(expected: Value, comptime src: []const u8) !void {
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
@@ -3345,8 +3584,8 @@ fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, comptim
 
     const byte_code = blk: {
         var error_report = ztl.CompileErrorReport{};
-        var c = try Compiler(App).init(allocator);
-        c.compile("<% " ++ src ++ "%>", .{.error_report = &error_report}) catch |err| {
+        var c = try Compiler(App).init(allocator, app, .{.error_report = &error_report});
+        c.compile("<% " ++ src ++ "%>") catch |err| {
             std.debug.print("Compilation error: {any}\n{}\n", .{err, error_report});
             return err;
         };
@@ -3377,14 +3616,14 @@ fn testReturnValueWithApp(comptime App: type, app: App, expected: Value, comptim
 }
 
 fn testError(expected: []const u8, comptime src: []const u8) !void {
-    return testErrorWithApp(void, expected, src);
+    return testErrorWithApp(void, {}, expected, src);
 }
 
-fn testErrorWithApp(comptime App: type, expected: []const u8, comptime src: []const u8) !void {
+fn testErrorWithApp(comptime App: type, app: App, expected: []const u8, comptime src: []const u8) !void {
     var error_report = ztl.CompileErrorReport{};
-    var c = Compiler(App).init(t.arena.allocator()) catch unreachable;
+    var c = Compiler(App).init(t.arena.allocator(), app, .{.error_report = &error_report}) catch unreachable;
 
-    c.compile("<% " ++ src ++ " %>", .{.error_report = &error_report}) catch {
+    c.compile("<% " ++ src ++ " %>") catch {
         var buf = std.ArrayListUnmanaged(u8){};
         defer buf.deinit(t.allocator);
 
@@ -3401,8 +3640,8 @@ fn testErrorWithApp(comptime App: type, expected: []const u8, comptime src: []co
 
 fn testRuntimeError(expected: []const u8, comptime src: []const u8) !void {
     var error_report = ztl.CompileErrorReport{};
-    var c = try Compiler(void).init(t.arena.allocator());
-    c.compile("<% " ++ src ++ " %>", .{.error_report = &error_report}) catch |err| {
+    var c = try Compiler(void).init(t.arena.allocator(), {}, .{.error_report = &error_report});
+    c.compile("<% " ++ src ++ " %>") catch |err| {
         std.debug.print("Compilation error: {any}\n{}\n", .{err, error_report});
         return err;
     };

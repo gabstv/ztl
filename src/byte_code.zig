@@ -115,8 +115,11 @@ pub fn ByteCode(comptime App: type) type {
             self.frame_count = fc;
 
             if (comptime config.shouldDebug(App, .full)) {
-                try self.debug(.FUNCTION_NAME, 1 + @as(u8, @intCast(name.len)));
-                try self.frame.write(self.allocator, &.{@intCast(name.len)});
+                // function names can be long because of the auto-generated
+                // name we give @includes
+                const name_len: u16 = @intCast(name.len);
+                try self.debug(.FUNCTION_NAME, 2 + name_len);
+                try self.frame.write(self.allocator, std.mem.asBytes(&name_len));
                 try self.frame.write(self.allocator, name);
             }
         }
@@ -392,8 +395,8 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                             // first instruction, and we don't want to prepend a \n
                             try writer.writeAll("\n");
                         }
-                        const function_name_len = code[i];
-                        i += 1;
+                        const function_name_len: u16 = @bitCast(code[i .. i + 2][0..2].*);
+                        i += 2;
                         try std.fmt.format(writer, "{x:0>4} fn {s}:\n", .{ op_code_pos, code[i .. i + function_name_len] });
                         i += function_name_len;
                     },
@@ -742,12 +745,12 @@ test "bytecode: functions debug full" {
     try expectDisassemble(App, b,
         \\// Version: 0
         \\0000 fn sum:
-        \\0008 CONSTANT_F64 44
-        \\0011 RETURN
+        \\0009 CONSTANT_F64 44
+        \\0012 RETURN
         \\
         \\<main>:
-        \\0012 CALL 2 0000 (sum)
-        \\0017 RETURN
+        \\0013 CALL 2 0000 (sum)
+        \\0018 RETURN
         \\
     );
 }

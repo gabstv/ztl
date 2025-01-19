@@ -7,6 +7,7 @@ pub const Compile = struct {
     src: []const u8 = "",
     err: ?anyerror = null,
     message: []const u8 = "",
+    include_key: ?[]const u8 = null,
 
     pub fn format(self: *const Compile, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         if (self.err) |se| {
@@ -28,6 +29,12 @@ pub const Compile = struct {
         try writer.writeBytesNTimes("-", c);
         try writer.writeAll("^");
         try writer.writeAll(self.contextAfter(1));
+
+        if (self.include_key) |ik| {
+            try writer.writeAll("\nIn @include file: '");
+            try writer.writeAll(ik);
+            try writer.writeByte('\'');
+        }
     }
 
     pub fn line(self: *const Compile) []const u8 {

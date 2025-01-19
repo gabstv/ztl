@@ -5,6 +5,7 @@ const Value = ztl.Value;
 
 const VM = @import("vm.zig").VM;
 const Compiler = @import("compiler.zig").Compiler;
+const CompilerOpts = @import("compiler.zig").Opts;
 
 const RenderErrorReport = ztl.RenderErrorReport;
 const CompileErrorReport = ztl.CompileErrorReport;
@@ -44,8 +45,8 @@ pub fn Template(comptime App: type) type {
             const template_arena = self.arena.allocator();
             const build_allocator = build_arena.allocator();
 
-            var compiler = try Compiler(App).init(build_allocator);
-            compiler.compile(src, .{.error_report = opts.error_report}) catch |err| {
+            var compiler = try Compiler(App).init(build_allocator, self.app, opts);
+            compiler.compile(src) catch |err| {
                 if (opts.error_report) |er| {
                     er.message = try template_arena.dupe(u8, er.message);
                 }
@@ -124,10 +125,6 @@ pub fn Template(comptime App: type) type {
     };
 }
 
-pub const CompilerOpts = struct {
-    error_report: ?*CompileErrorReport = null,
-};
-
 pub const RenderOpts = struct {
     allocator: ?Allocator = null,
     error_report: ?*RenderErrorReport = null,
@@ -198,13 +195,13 @@ test "Template: escaping" {
         pub const ZtlConfig = struct {
             pub const escape_by_default: bool = true;
         };
-    }, "&lt;h1&gt;hello&lt;/h1&gt;", "<%= @name %>", .{ .name = "<h1>hello</h1>" });
+    }, .{}, "&lt;h1&gt;hello&lt;/h1&gt;", "<%= @name %>", .{ .name = "<h1>hello</h1>" });
 
     try testTemplateWithApp(struct {
         pub const ZtlConfig = struct {
             pub const escape_by_default: bool = true;
         };
-    }, "<h1>hello</h1>", "<%= safe @name %>", .{ .name = "<h1>hello</h1>" });
+    }, .{}, "<h1>hello</h1>", "<%= safe @name %>", .{ .name = "<h1>hello</h1>" });
 }
 
 test "Template: local and global" {
@@ -327,12 +324,51 @@ test "Template: global in function" {
    , .{.count = 4});
 }
 
-fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
-    return testTemplateWithApp(void, expected, template, args);
+test "Template: @include" {
+    try testTemplate("included_1",
+        \\<% @include("incl_1") %>
+   , .{});
+
+    try testTemplate("included_1,included_1,",
+        \\<% for (var i = 0; i < 2; i++) { -%>
+        \\ <% @include("incl_1") %>,
+        \\<%- } %>
+   , .{});
 }
 
-fn testTemplateWithApp(comptime App: type, expected: []const u8, template: []const u8, args: anytype) !void {
-    var tmpl = Template(App).init(t.allocator, App{});
+test "Template: @include error" {
+    try testTemplateFullError(
+        \\UnexpectedToken - Expected opening parenthesis ('('), got ; (SEMICOLON) - line 2:
+        \\ Products:
+        \\ <% for ; %>
+        \\--------^
+        \\In @include file: 'incl_err'
+    ,
+        \\ Home
+        \\ <% @include("incl_err") %>
+    );
+
+}
+
+fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
+    const App = struct {
+        pub fn partial(self: @This(), _: Allocator, template_key: []const u8, include_key: []const u8) !?ztl.PartialResult {
+            _ = self;
+            _ = template_key;
+
+            if (std.mem.eql(u8, include_key, "incl_1")) {
+                return .{.src = "<%= `included_1` %>"};
+            }
+
+            return null;
+        }
+    };
+
+    return testTemplateWithApp(App, .{}, expected, template, args);
+}
+
+fn testTemplateWithApp(comptime App: type, app: App, expected: []const u8, template: []const u8, args: anytype) !void {
+    var tmpl = Template(App).init(t.allocator, app);
     defer tmpl.deinit();
 
     var error_report = CompileErrorReport{};
@@ -365,7 +401,23 @@ fn testTemplateError(expected: []const u8, template: []const u8) !void {
 }
 
 fn testTemplateFullError(expected: []const u8, template: []const u8) !void {
-    var tmpl = Template(void).init(t.allocator, {});
+    const App = struct {
+        pub fn partial(self: @This(), _: Allocator, template_key: []const u8, include_key: []const u8) !?ztl.PartialResult {
+            _ = self;
+            _ = template_key;
+
+            if (std.mem.eql(u8, include_key, "incl_err")) {
+                return .{.src =
+                    \\ Products:
+                    \\ <% for ; %>
+                };
+            }
+
+            return null;
+        }
+    };
+
+    var tmpl = Template(App).init(t.allocator, .{});
     defer tmpl.deinit();
 
     var error_report = CompileErrorReport{};
