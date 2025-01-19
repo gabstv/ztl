@@ -155,7 +155,8 @@ pub const Scanner = struct {
                     else => return .{.LESSER = {}},
                 },
                 '0'...'9' => return self.number(&pos),
-                '"' => return self.string(&pos),
+                '"' => return self.string('"', &pos),
+                '\'' => return self.string('\'', &pos),
                 '`' => {
                     const end = std.mem.indexOfScalarPos(u8, src, pos, '`') orelse return error.UnterminatedString;
                     pos = @intCast(end + 1);
@@ -190,7 +191,7 @@ pub const Scanner = struct {
     // TODO: optimize unescaping (maybe keep an array of N escape index so that
     // we can quickly copy inbetween without re-checking for \ again)
     // scanner_pos points to the first byte after the opening quote
-    fn string(self: *Scanner, scanner_pos: *u32) Error!Token {
+    fn string(self: *Scanner, delimiter: u8, scanner_pos: *u32) Error!Token {
         var pos = scanner_pos.*;
 
         const start = pos;
@@ -198,16 +199,17 @@ pub const Scanner = struct {
 
         var escape_count: usize = 0;
 
-        blk: while (pos < src.len) {
-            switch (src[pos]) {
-                '"' => break :blk,
-                '\\' => {
-                    escape_count += 1;
-                    pos += 1;
-                },
-                else => {},
+        while (pos < src.len) {
+            const c = src[pos];
+            if (c == delimiter) {
+                break;
             }
-            pos += 1;
+            if (c == '\\') {
+                pos += 2;
+                escape_count += 1;
+            } else {
+                pos += 1;
+            }
         }
 
         if (pos == src.len) {
@@ -528,6 +530,7 @@ test "scanner: multibyte tokens" {
 }
 
 test "scanner: string literals" {
+    // double quotes
     try expectTokens("\"\"", &.{.{ .STRING = "" }});
 
     try expectTokens("\"hello world\" == \"Goodbye moon\"", &.{
@@ -552,6 +555,32 @@ test "scanner: string literals" {
         try expectError(error.InvalidEscapeSequence, " \"   \\a \" ");
     }
 
+    // single quotes
+    try expectTokens("''", &.{.{ .STRING = "" }});
+
+    try expectTokens("'hello world' == 'Goodbye moon'", &.{
+        .{ .STRING = "hello world" },
+        .{ .EQUAL_EQUAL = {} },
+        .{ .STRING = "Goodbye moon" },
+    });
+
+    try expectTokens("' \\n \\r \\t \\\" \\' \\\\ '", &.{.{ .STRING = " \n \r \t \" ' \\ " }});
+
+    try expectTokens("'\\''", &.{.{ .STRING = "'" }});
+
+    try expectTokens("'abc'  +  '123\\\"x'", &.{
+        .{ .STRING = "abc" },
+        .{ .PLUS = {} },
+        .{ .STRING = "123\"x" },
+    });
+
+    {
+        try expectError(error.UnterminatedString, "'abc 123");
+        try expectError(error.UnterminatedString, "'ab\\\'");
+        try expectError(error.InvalidEscapeSequence, " '   \\a ' ");
+    }
+
+    // backticks
     try expectTokens("``", &.{.{ .STRING = "" }});
 
     try expectTokens("`hello world`", &.{.{ .STRING = "hello world" }});

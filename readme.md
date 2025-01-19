@@ -85,7 +85,7 @@ var tags = [1, 1.2, null];
 var lookup = %{tea: 9, 123: null};
 ```
 
-Strings are wrapped in double-quotes or backticks (\`hello\`). Backticks do not require escaping.
+Strings are wrapped in single-quotes, double-quotes or backticks (\`hello\`). Backticks do not require escaping.
 
 Supported control flow:
 * if / else if / else 
