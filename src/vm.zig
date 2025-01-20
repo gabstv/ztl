@@ -1138,19 +1138,18 @@ pub fn VM(comptime App: type) type {
                 .comptime_int => return .{ .i64 = zig },
                 .comptime_float => return .{ .f64 = zig },
                 .pointer => |ptr| switch (ptr.size) {
-                    .One => switch (@typeInfo(ptr.child)) {
+                    .one => switch (@typeInfo(ptr.child)) {
                         .array => {
                             const Slice = []const std.meta.Elem(ptr.child);
                             return self.createValue(@as(Slice, zig));
                         },
                         else => return self.createValue(zig.*),
                     }
-                        .Many,
-                    .Slice => {
-                        if (ptr.size == .Many and ptr.sentinel == null) {
+                    .many, .slice => {
+                        if (ptr.size == .many and ptr.sentinel_ptr == null) {
                             return error.UnsupportedType;
                         }
-                        const slice = if (ptr.size == .Many) std.mem.span(zig) else zig;
+                        const slice = if (ptr.size == .many) std.mem.span(zig) else zig;
                         const child = ptr.child;
                         if (child == u8) {
                             return .{ .string = zig };
