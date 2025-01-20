@@ -334,6 +334,8 @@ test "Template: @include" {
         \\ <% @include("incl_1") %>,
         \\<%- } %>
    , .{});
+
+    try testTemplate("included:2", "<% @include('incl_2') %>", .{});
 }
 
 test "Template: @include error" {
@@ -342,12 +344,21 @@ test "Template: @include error" {
         \\ Products:
         \\ <% for ; %>
         \\--------^
-        \\In @include file: 'incl_err'
+        \\In @include file: 'incl_err_1'
     ,
         \\ Home
-        \\ <% @include("incl_err") %>
+        \\ <% @include("incl_err_1") %>
     );
 
+    try testTemplateFullError(
+        \\UnexpectedEOF - Missing expected end tag, '%>' - line 1:
+        \\<%=
+        \\---^
+        \\In @include file: 'incl_err_2'
+    ,
+        \\ Home
+        \\ <% @include("incl_err_2") %>
+    );
 }
 
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
@@ -358,6 +369,10 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
 
             if (std.mem.eql(u8, include_key, "incl_1")) {
                 return .{.src = "<%= `included_1` %>"};
+            }
+
+            if (std.mem.eql(u8, include_key, "incl_2")) {
+                return .{.src = "included:2"};
             }
 
             return null;
@@ -406,11 +421,15 @@ fn testTemplateFullError(expected: []const u8, template: []const u8) !void {
             _ = self;
             _ = template_key;
 
-            if (std.mem.eql(u8, include_key, "incl_err")) {
+            if (std.mem.eql(u8, include_key, "incl_err_1")) {
                 return .{.src =
                     \\ Products:
                     \\ <% for ; %>
                 };
+            }
+
+            if (std.mem.eql(u8, include_key, "incl_err_2")) {
+                return .{.src = "<%="};
             }
 
             return null;

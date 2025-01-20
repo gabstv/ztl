@@ -184,11 +184,7 @@ pub fn Compiler(comptime A: type) type {
             while (self.current != .EOF) {
                 try self.declaration();
             }
-
-            if (self.mode == .code or self.mode == .output) {
-                self.err = "Missing expected end tag, '%>'";
-                return error.UnexpectedEOF;
-            }
+            try self.verifyEndState();
 
             var it = self.functions.iterator();
             while (it.next()) |kv| {
@@ -208,6 +204,13 @@ pub fn Compiler(comptime A: type) type {
 
             try writer.null();
             try writer.op(.RETURN);
+        }
+
+        fn verifyEndState(self: *Self) error{UnexpectedEOF}!void {
+            if (self.mode == .code or self.mode == .output) {
+                self.err = "Missing expected end tag, '%>'";
+                return error.UnexpectedEOF;
+            }
         }
 
         fn advance(self: *Self) !void {
@@ -801,6 +804,12 @@ pub fn Compiler(comptime A: type) type {
                             }
                         };
 
+                        for (self.includes.items) |incl| {
+                            if (std.mem.eql(u8, include_key, incl.key)) {
+                                return error.IncludeLoopDetected;
+                            }
+                        }
+
                         try self.advance();
                         // TODO parameter list
                         try self.consume(.RIGHT_PARENTHESIS, "Expected closing parenthesis ')'");
@@ -838,6 +847,7 @@ pub fn Compiler(comptime A: type) type {
                         while (self.current != .EOF) {
                             try self.declaration();
                         }
+                        try self.verifyEndState();
                         try writer.null();
                         try writer.op(.RETURN);
 
@@ -1546,6 +1556,7 @@ pub const Error = error{
     PartialsNotConfigured,
     PartialLoadError,
     PartialUnknown,
+    IncludeLoopDetected,
 } || @import("scanner.zig").Error;
 
 // For top-level functions we store a small function header in the bytecode's
@@ -3530,6 +3541,14 @@ test "Compiler: partial" {
                 };
             }
 
+            if (std.mem.eql(u8, include_key, "recursive_1")) {
+                return .{.src = "<% @include('recursive_2') %>"};
+            }
+
+            if (std.mem.eql(u8, include_key, "recursive_2")) {
+                return .{.src = "<% @include('recursive_1') %>"};
+            }
+
             return null;
         }
     };
@@ -3548,6 +3567,10 @@ test "Compiler: partial" {
 
     try testErrorWithApp(App, .{}, "BuiltinNotAnExpression - Builtin function '@include' does not produce a value",
         \\ return @include("incl_1");
+    );
+
+    try testErrorWithApp(App, .{}, "IncludeLoopDetected",
+        \\ @include("recursive_1");
     );
 
     try testReturnValueWithApp(App, .{}, .{.i64 = 12350},
@@ -3634,6 +3657,10 @@ fn testErrorWithApp(comptime App: type, app: App, expected: []const u8, comptime
         }
         return;
     };
+
+    // const byte_code = try c.writer.toBytes(t.allocator);
+    // defer t.allocator.free(byte_code);
+    // disassemble(App, t.allocator, byte_code, std.io.getStdErr().writer()) catch unreachable;
 
     return error.NoError;
 }
