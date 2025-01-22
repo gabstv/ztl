@@ -118,15 +118,9 @@ pub fn Compiler(comptime A: type) type {
 
         app: A,
         opts: Opts,
+        global_mode: GlobalMode,
 
         const Self = @This();
-
-        const Mode = enum {
-            code,     // <% ... %>
-            output,   // <%= ... %>
-            literal,  // everything NOT in the above
-            literal_strip_left,
-        };
 
         // we expect allocator to be an arena
         pub fn init(allocator: Allocator, app: A, opts: Opts,) !Self {
@@ -143,6 +137,7 @@ pub fn Compiler(comptime A: type) type {
                 .arena = allocator,
                 .function_calls = .{},
                 .string_literals = .{},
+                .global_mode = .normal,
                 .jumper = Jumper(A).init(allocator),
                 .writer = try ByteCode(A).init(allocator),
                 .error_pos = 0,
@@ -790,7 +785,6 @@ pub fn Compiler(comptime A: type) type {
                         // 2) We need to translate globals within the include
                         // to local hash gets.
 
-
                         if (std.meta.hasMethod(App, "partial") == false) {
                             self.setError(@typeName(App) ++ " dot not have a 'partial' method. @include cannot be used");
                             return error.PartialsNotConfigured;
@@ -811,8 +805,16 @@ pub fn Compiler(comptime A: type) type {
                         }
 
                         try self.advance();
-                        // TODO parameter list
-                        try self.consume(.RIGHT_PARENTHESIS, "Expected closing parenthesis ')'");
+                        if (try self.match(.COMMA)) {
+                            const arity = try self.parameterList(1);
+                            std.debug.assert(arity == 1);
+                        } else {
+                            try self.consume(.RIGHT_PARENTHESIS, "Expected closing parenthesis ')'");
+                            // forcing an empy map makes implementing @include a lot easier
+                            // specifically, it makes it easy to handle @globals in the include
+                            // template.
+                            try self.writer.initializeMap(0);
+                        }
                         try self.consumeSemicolon(true);
 
                         // We give the include a unique function name. Since user-defined functions
@@ -841,6 +843,7 @@ pub fn Compiler(comptime A: type) type {
                         try self.beginInclude(include_key, result.src);
 
                         try self.beginScope(false);
+                        try self.locals.append(self.arena, .{.name = include_fn_name, .depth = 0});
                         gop.value_ptr.* = try self.newFunction(include_fn_name);
                         try writer.beginFunction(include_fn_name);
 
@@ -857,8 +860,8 @@ pub fn Compiler(comptime A: type) type {
                         // we can report a better error
                         self.endInclude();
 
-                        gop.value_ptr.arity = 0;
-                        gop.value_ptr.code_pos = try writer.endFunction(gop.value_ptr.data_pos, 0);
+                        gop.value_ptr.arity = 1;
+                        gop.value_ptr.code_pos = try writer.endFunction(gop.value_ptr.data_pos, 1);
 
                         try self.endScope(true);
                         return self.writer.opWithData(.CALL, std.mem.asBytes(&gop.value_ptr.data_pos));
@@ -1014,23 +1017,36 @@ pub fn Compiler(comptime A: type) type {
         }
 
         fn variable(self: *Self, can_assign: bool) Error!void {
+            const writer = &self.writer;
             const name = self.previous.IDENTIFIER;
-
             const is_global = name[0] == '@';
-            var idx: usize = undefined;
 
-            if (is_global) {
-                const gop = try self.globals.getOrPut(self.arena, name);
-                if (gop.found_existing) {
-                    idx = gop.value_ptr.*;
-                } else {
-                    // -1 because we've already put this one in
-                    idx = self.globals.count() - 1;
-                    gop.value_ptr.* = idx;
-                    if (comptime config.shouldDebug(App, .full) == true) {
-                        try self.writer.debugGlobalVariableName(name, @intCast(idx));
+            var idx: usize = undefined;
+            if (is_global) switch (self.global_mode) {
+                .function => {
+                    try self.setErrorFmt("Globals are not allowed in functions: '{s}'", .{name});
+                    return error.GlobalInFunction;
+                },
+                .include => {
+                    // the included value is always the first parameter in the function stack
+                    try writer.getVariable(0, false);
+                    // trim off the '@'
+                    try self.stringLiteral(name[1..]);
+                    return self.indexOperation(can_assign);
+                },
+                .normal => {
+                    const gop = try self.globals.getOrPut(self.arena, name);
+                    if (gop.found_existing) {
+                        idx = gop.value_ptr.*;
+                    } else {
+                        // -1 because we've already put this one in
+                        idx = self.globals.count() - 1;
+                        gop.value_ptr.* = idx;
+                        if (comptime config.shouldDebug(App, .full) == true) {
+                            try self.writer.debugGlobalVariableName(name, @intCast(idx));
+                        }
                     }
-                }
+                },
             } else {
                 idx = self.localVariableIndex(name) orelse {
                     try self.setErrorFmt("Variable '{s}' is unknown", .{name});
@@ -1043,7 +1059,6 @@ pub fn Compiler(comptime A: type) type {
                 }
             }
 
-            const writer = &self.writer;
             if (can_assign) {
                 if (try self.match(.EQUAL)) {
                     try self.expression();
@@ -1154,6 +1169,10 @@ pub fn Compiler(comptime A: type) type {
             try self.expression();
             try self.consume(.RIGHT_BRACKET, "left bracket (']')");
 
+            return self.indexOperation(can_assign);
+        }
+
+        fn indexOperation(self: *Self, can_assign: bool) Error!void {
             const writer = &self.writer;
             if (can_assign) {
                 if (try self.match(.EQUAL)) {
@@ -1469,12 +1488,14 @@ pub fn Compiler(comptime A: type) type {
                 .restore_pos = self.scanner.pos,
                 .restore_current = self.current,
                 .restore_previous = self.previous,
+                .restore_global_mode = self.global_mode,
             });
 
             self.scanner.reset(src);
             self.mode = .literal;
             self.previous = .{.BOF = {}};
             self.current = .{.BOF = {}};
+            self.global_mode = .include;
         }
 
         fn endInclude(self: *Self) void {
@@ -1484,6 +1505,7 @@ pub fn Compiler(comptime A: type) type {
             self.scanner.pos = include.restore_pos;
             self.current = include.restore_current;
             self.previous = include.restore_previous;
+            self.global_mode = include.restore_global_mode;
         }
 
         fn parameterList(self: *Self, max_arity: u8) !u8 {
@@ -1529,6 +1551,22 @@ pub fn Compiler(comptime A: type) type {
     };
 }
 
+const Mode = enum {
+    code,     // <% ... %>
+    output,   // <%= ... %>
+    literal,  // everything NOT in the above
+    literal_strip_left,
+};
+
+const GlobalMode = enum {
+    // globals are allowed
+    normal,
+    // globals aren't allowed
+    function,
+    // an include called with a single parameter, globals are translated to local hash gets
+    include,
+};
+
 pub const Error = error{
     UnexpectedToken,
     UnknownFunction,
@@ -1557,6 +1595,7 @@ pub const Error = error{
     PartialLoadError,
     PartialUnknown,
     IncludeLoopDetected,
+    GlobalInFunction,
 } || @import("scanner.zig").Error;
 
 // For top-level functions we store a small function header in the bytecode's
@@ -1598,6 +1637,7 @@ const Include = struct {
     restore_pos: u32,
     restore_current: Token,
     restore_previous: Token,
+    restore_global_mode: GlobalMode,
 
     // the include key
     key: []const u8,
@@ -3536,9 +3576,7 @@ test "Compiler: partial" {
             }
 
             if (std.mem.eql(u8, include_key, "incl_dbl")) {
-                return .{
-                    .src = \\<% fn dbl(a) { return a * 2; } %>
-                };
+                return .{.src = "<% fn dbl(a) { return a * 2; } %>"};
             }
 
             if (std.mem.eql(u8, include_key, "recursive_1")) {

@@ -336,6 +336,11 @@ test "Template: @include" {
    , .{});
 
     try testTemplate("included:2", "<% @include('incl_2') %>", .{});
+
+    try testTemplate("a include 3", "a <% @include('incl_arg_1', %{value: 3}) %>", .{});
+    try testTemplate("bb include null", "bb <% @include('incl_arg_1', %{}) %>", .{});
+    try testTemplate("ccc include null", "ccc <% @include('incl_arg_1') %>", .{});
+    try testTemplate("ccc  include incl_local null", "ccc <% @include('incl_arg_2') %>", .{});
 }
 
 test "Template: @include error" {
@@ -373,6 +378,14 @@ fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void
 
             if (std.mem.eql(u8, include_key, "incl_2")) {
                 return .{.src = "included:2"};
+            }
+
+            if (std.mem.eql(u8, include_key, "incl_arg_1")) {
+                return .{.src = "include <%= @value %>"};
+            }
+
+            if (std.mem.eql(u8, include_key, "incl_arg_2")) {
+                return .{.src = "<% var x = 'incl_local' %> include <%= x %> <%= @value %>"};
             }
 
             return null;

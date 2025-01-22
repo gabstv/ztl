@@ -455,7 +455,7 @@ pub fn disassemble(comptime App: type, allocator: Allocator, byte_code: []const 
                 i += 4;
                 const header_end = header_start + 4;
                 const string_end = @as(u32, @bitCast(data[header_start..header_end][0..4].*));
-                try std.fmt.format(writer, " {s}\n", .{data[header_end..string_end]});
+                try std.fmt.format(writer, " `{s}`\n", .{data[header_end..string_end]});
             },
             .JUMP => {
                 const relative = @as(i16, @bitCast(code[i .. i + 2][0..2].*));
