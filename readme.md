@@ -53,8 +53,6 @@ pub fn main() !void {
 ## Project Status
 The project is in early development and has not seen much dogfooding. Looking for feature requests and bug reports.
 
-Better error reporting is high on the list of things to add.
-
 ## Template Overview
 Output tags, `<%= %>`, support space trimming via `<%-=` and `-%>`. 
 
@@ -64,8 +62,9 @@ By default, output is not escaped. You can use the `escape` keyword to apply bas
 <%= escape product["name"] %>
 ```
 
-Alternatively, you can set `ZtlConfig.escape_by_default` to true to have escape on by default. In this case the special `escape` is invalid, however the `safe` keyword can be used to output the value as-is.
+Alternatively, you can set `ZtlConfig.escape_by_default` (see [customization](#customization)) to true to have escape on by default. In this case the special `escape` is invalid, however the `safe` keyword can be used to output the value as-is.
 
+### Types
 The language supports the following types:
 * i64
 * f64
@@ -87,6 +86,31 @@ var lookup = %{tea: 9, 123: null};
 
 Strings are wrapped in single-quotes, double-quotes or backticks (\`hello\`). Backticks do not require escaping.
 
+There are only a few properties:
+* `len` - get the length of a list or map
+* `key` - get the key of a map entry (only valid in a `foreach`)
+* `value` - get the value of a map entry (only valid in a `foreach`)
+
+There are currently only a few methods:
+* `pop` - return and remove the last value from a list (or `null`)
+* `last` - return the last value from a list (or `null`)
+* `first` - return the first value from a list (or `null`)
+* `append` - add a value to a list
+* `remove` - remove the given value from a list (O(n)) or a map
+* `remove_at` - remove the value from a list at the given index (supports negative indexes)
+* `contains` - returns true/false if the value exists in a list (O(n)) or map
+* `index_of` - returns the index of (or null) of the first instance of the value in a list (O(n))
+* `sort` - sorts the list in-place
+* `concat` - appends one array to another, mutating the original
+
+```js
+var list = [3, 2, 1].sort();
+for (list) |item| {
+    <%= item %>
+}
+```
+
+### Control Flow
 Supported control flow:
 * if / else if / else 
 * while
@@ -118,6 +142,7 @@ for (var i = 0; i < arr1.len; i++) {
 }
 ```
 
+### Functions
 Templates can contain functions:
 
 ```js
@@ -129,34 +154,6 @@ fn add(a, b) {
 }
 ```
 
-There are only a few properties:
-* `len` - get the length of a list or map
-* `key` - get the key of a map entry (only valid in a `foreach`)
-* `value` - get the value of a map entry (only valid in a `foreach`)
-
-There are currently only a few methods:
-* `pop` - return and remove the last value from a list (or `null`)
-* `last` - return the last value from a list (or `null`)
-* `first` - return the first value from a list (or `null`)
-* `append` - add a value to a list
-* `remove` - remove the given value from a list (O(n)) or a map
-* `remove_at` - remove the value from a list at the given index (supports negative indexes)
-* `contains` - returns true/false if the value exists in a list (O(n)) or map
-* `index_of` - returns the index of (or null) of the first instance of the value in a list (O(n))
-* `sort` - sorts the list in-place
-* `concat` - appends one array to another, mutating the original
-
-```js
-var list = [3, 2, 1].sort();
-for (list) |item| {
-    <%= item %>
-}
-```
-
-There is 1 built-in function:
-* `@print` - prints the value(s) to stderr
-
-Developers can add their own Zig functions.
 
 ## Zig Usage
 You can get an error report on failed compile by passing in a `*ztl.CompileErrorReport`:
@@ -195,9 +192,14 @@ try template.render(res.writer(), .{}, .{
 ## Customization
 `ztl.Template` is a generic. The generic serves two purposes: to configure ztl and to provide custom functions.
 
+For simple cases, `void` can be passed. 
+
+To configure ZTL, to add custom functions or to support the `@include` builtin, a custom type must be passed.
+
 
 ```zig
 const MyAppsTemplate = struct {
+
     // Low level configuration
     pub const ZtlConfig = struct {
         // default values:
@@ -213,13 +215,14 @@ const MyAppsTemplate = struct {
     };
 
     // Defines the function and the number of arguments they take
+    // Must also define a `call` method (below)
     pub const ZtlFunctions = struct {
-        pub const add = 2;
-        pub const double = 1;
+        pub const add = 2; // takes 2 parameters
+        pub const double = 1;  // takes 1 parameter
     };
 
-    // Will add utilities to make writing custom functions easier
-    pub fn call(self: *@This(), vm: *ztl.VM(*@This()), function: ztl.Functions(@This()), values: []ztl.Value) !ztl.Value {
+    // must also have a ZtlFunction struct (above) with each function and their arity
+    pub fn call(self: *MyAppsTemplate, vm: *ztl.VM(*@This()), function: ztl.Functions(@This()), values: []ztl.Value) !ztl.Value {
         _ = vm;
 
         switch (function) {
@@ -227,13 +230,50 @@ const MyAppsTemplate = struct {
             .double => return .{.i64 = values[0].i64 * 2 + self.id},
         }
     }
+
+    // see #include documentation
+    pub fn partial(self: *MyAppsTemplate, _: Allocator, template_key: []const u8, include_key: []const u8) !?ztl.PartialResult {
+        _ = template_key;
+        if (std.mem.eql(u8, include_key, "header")) {
+            return .{.src = "Welcome <%= @name %>"}
+        }
+
+        return null;
+    }
 }
 ```
 
-The above `call` is unsafe. While the # of parameters is enforced (i.e. `values.len` is guaranteed to be 2 for `add` and 1 for `double`), the types are unknown. I plan on adding utilities to deal with the `ztl.Value` tagged union.
+### Extending with Zig
+The combination of `ZtlFunctions` and the `call` function allows custom Zig code to be exposed as a template function. With the above `MyAppsTemplate`, templates can call `add(a, b)` and `double(123)`.
 
-Notice that the first parameter to `call` is an instance of the type itself. This is given to `Template.init`. Thus you can attach any application-specific data here and have access to it in `call`.
+However, do note that the above implementation of `call` is unsafe. The # of parameters is guaranteed to be right, but not the types. In other words, when `function == .add` then `values.len == 2`, but the type of `values[0]` and `values[1]` is not guaranteed to be an `i64`.
 
-```zig
-Template(*MyAppsTemplate).init(allocator, &app);
+The first parameter to `call` is the instance of `MyAppsTemplate` passed into `Template.init`. This could be used, for example, to write a custom function that can access a database.
+
+## Builtins
+There are a few built-in functions. 
+
+### @print
+The `@print()` builtin function prints the value(s) to stderr.
+
+```js
+@print(value, 1, "hello");
 ```
+
+### @include
+A template can `@include` another. 
+
+````
+// header
+Hello <%= @name %>
+
+// main template
+<% @include('header', %{name: "Leto"}) %>
+```
+
+For this to work, the `partial` method must be defined, as seen above in `MyAppsTemplate`. The `partial` method takes 4 parameters:
+
+* `self` - The instance of T passed into Template.init()
+* `allocator` - An [arena] allocator. For example, if you're going to read the partial using `file.readToEndAlloc`, you should use this allocator.
+* `template_key` - When `template.compile` is called, you can specify a `key: []const u8 = ""` in the options. This value is passed back into `partial` (to help you identify which template is being compiled)
+* `include_key` - The first parameter passed to `@include`. In the little snippet above, this would be "header".
