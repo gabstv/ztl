@@ -392,8 +392,10 @@ pub fn VM(comptime App: type) type {
                         const target = values[l - 2];
 
                         // replace the array/map with whatever we got
-                        values[l - 2] = try self.getIndexed(ref_pool, target, values[last_value_index]);
+                        const result = try self.getIndexed(ref_pool, target, values[last_value_index]);
+                        self.acquire(result);
                         self.release(target);
+                        values[l - 2] = result;
                         stack.items.len = last_value_index;
                     },
                     .INDEX_SET => {

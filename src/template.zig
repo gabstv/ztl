@@ -366,6 +366,18 @@ test "Template: @include error" {
     );
 }
 
+// https://github.com/karlseguin/ztl/issues/3
+test "Template: print map" {
+    const array: []const []const u8 = &.{ "Hello", "World" };
+    const globals = .{
+        .report = .{
+            .array = array,
+        },
+    };
+
+    try testTemplate("[Hello, World];[Hello World]", "<%= @report['array'] %>;<%= @report['array'] %>", globals);
+}
+
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
     const App = struct {
         pub fn partial(self: @This(), _: Allocator, template_key: []const u8, include_key: []const u8) !?ztl.PartialResult {
