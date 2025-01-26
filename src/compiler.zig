@@ -376,6 +376,11 @@ pub fn Compiler(comptime A: type) type {
             var pos = scanner.pos;
             var start = pos;
             const src = scanner.src;
+
+            if (src.len == 0) {
+                return self.advance();
+            }
+
             const end: u32 = @intCast(src.len - 1);
 
             while (true) {

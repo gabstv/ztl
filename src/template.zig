@@ -147,6 +147,7 @@ test "Template: simple" {
 }
 
 test "Template: edge cases" {
+    try testTemplate("", "", .{});
     try testTemplate("", "<%= %>", .{});
 
     try testTemplate("hello %", "hello %", .{});
@@ -367,7 +368,7 @@ test "Template: @include error" {
 }
 
 // https://github.com/karlseguin/ztl/issues/3
-test "Template: print map" {
+test "Template: multiple index get" {
     const array: []const []const u8 = &.{ "Hello", "World" };
     const globals = .{
         .report = .{
@@ -375,7 +376,7 @@ test "Template: print map" {
         },
     };
 
-    try testTemplate("[Hello, World];[Hello World]", "<%= @report['array'] %>;<%= @report['array'] %>", globals);
+    try testTemplate("[Hello, World];[Hello, World]", "<%= @report['array'] %>;<%= @report['array'] %>", globals);
 }
 
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
