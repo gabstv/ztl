@@ -4,6 +4,12 @@ pub const DebugMode = enum {
     full,
 };
 
+pub const ReferenceCounting = enum {
+    none,
+    loose,
+    strict,
+};
+
 const Defaults = struct {
     pub const debug: DebugMode = .none;
     pub const max_locals: u16 = 256;
@@ -11,7 +17,7 @@ const Defaults = struct {
     pub const initial_code_size: u32 = 512;
     pub const initial_data_size: u32 = 512;
     pub const deduplicate_string_literals: bool = true;
-    pub const allow_leaks: bool = true;
+    pub const reference_counting: ReferenceCounting = .none;
     pub const escape_by_default: bool = false;
 };
 

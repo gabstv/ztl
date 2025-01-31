@@ -6,6 +6,7 @@ pub const Global = @import("template.zig").Global;
 pub const Template = @import("template.zig").Template;
 pub const DebugMode = @import("config.zig").DebugMode;
 pub const PartialResult = @import("compiler.zig").PartialResult;
+pub const ReferenceCounting = @import("config.zig").ReferenceCounting;
 
 pub const RenderErrorReport = @import("error_report.zig").Render;
 pub const CompileErrorReport = @import("error_report.zig").Compile;

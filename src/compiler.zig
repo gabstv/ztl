@@ -3566,6 +3566,7 @@ test "Compiler: partial" {
     const App = struct {
         pub const ZtlConfig = struct {
             pub const debug = ztl.DebugMode.full;
+            pub const reference_counting = ztl.ReferenceCounting.strict;
         };
 
         pub fn partial(self: @This(), _: Allocator, template_key: []const u8, include_key: []const u8) !?PartialResult {
@@ -3626,21 +3627,21 @@ fn testReturnValue(expected: Value, comptime src: []const u8) !void {
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const debug = ztl.DebugMode.full;
-            pub const allow_leaks = false;
+            pub const reference_counting = ztl.ReferenceCounting.strict;
         };
     }, .{}, expected, src);
 
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const max_locals = 256;
-            pub const allow_leaks = false;
+            pub const reference_counting = ztl.ReferenceCounting.strict;
         };
     }, .{}, expected, src);
 
     try testReturnValueWithApp(struct {
         pub const ZtlConfig = struct {
             pub const max_locals = 300;
-            pub const allow_leaks = false;
+            pub const reference_counting = ztl.ReferenceCounting.strict;
         };
     }, .{}, expected, src);
 }

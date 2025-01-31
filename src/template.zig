@@ -285,7 +285,7 @@ test "Template: runtime error" {
         \\      var value = 1;
         \\      value.pop();
         \\ %>
-    );
+    , .{});
 }
 
 test "Template: map global" {
@@ -369,15 +369,55 @@ test "Template: @include error" {
 
 // https://github.com/karlseguin/ztl/issues/3
 test "Template: multiple index get" {
-    const array: []const []const u8 = &.{ "Hello", "World" };
-    const globals = .{
-        .report = .{
-            .array = array,
-        },
-    };
+    {
+        // const array: []const []const u8 = &.{ "Hello", "World" };
+        // const globals = .{
+        //     .report = .{
+        //         .array = array,
+        //     },
+        // };
+        // try testTemplate("[Hello, World];[Hello, World]", "<%= @report['array'] %>;<%= @report['array'] %>", globals);
+    }
 
-    try testTemplate("[Hello, World];[Hello, World]", "<%= @report['array'] %>;<%= @report['array'] %>", globals);
+    {
+        // const globals = .{
+        //     .report = .{
+        //         .user_options = &.{
+        //             .{.name = "Leto", .description = "Worm", .type = "atreides"},
+        //         },
+        //     },
+        // };
+
+        const UserOptions = struct {
+            name: []const u8,
+            description: []const u8,
+            @"type": []const u8,
+        };
+
+        const globals = .{
+            .report = .{
+                .user_options = [_]UserOptions{
+                    .{.name = "Leto", .description = "Worm", .type = "atreides"},
+                },
+            },
+        };
+
+        try testTemplate(
+            \\
+            \\# Leto: Worm
+            \\
+            \\# -D{name: Leto, description: Worm, type: atreides}]
+        ,
+            \\<% foreach (@zbs["report"]["user_options"]) |user_option| { %>
+            \\# <%= user_option["name"] %>: <%= user_option["description"] %>
+            \\<%- } %>
+            \\<% foreach (@zbs["report"]["user_options"]) |user_option| { %>
+            \\# -D<%= user_option %>]
+            \\<%- } %>
+        , .{.zbs = globals});
+    }
 }
+
 
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
     const App = struct {
@@ -477,7 +517,7 @@ fn testTemplateFullError(expected: []const u8, template: []const u8) !void {
     return error.NoError;
 }
 
-fn testTemplateRenderError(expected: []const u8, template: []const u8) !void {
+fn testTemplateRenderError(expected: []const u8, template: []const u8, args: anytype) !void {
     var tmpl = Template(void).init(t.allocator, {});
     defer tmpl.deinit();
     try tmpl.compile(template, .{});
@@ -486,7 +526,7 @@ fn testTemplateRenderError(expected: []const u8, template: []const u8) !void {
     defer buf.deinit();
 
     var report = RenderErrorReport{};
-    tmpl.render(buf.writer(), .{}, .{ .error_report = &report }) catch {
+    tmpl.render(buf.writer(), args, .{ .error_report = &report }) catch {
         defer report.deinit();
         try t.expectString(expected, report.message);
         return;

@@ -210,7 +210,6 @@ const MyAppsTemplate = struct {
         pub const initial_code_size: u32 = 512;
         pub const initial_data_size: u32 = 512;
         pub const deduplicate_string_literals: bool = true;
-        pub const allow_leaks: bool = true;
         pub const escape_by_default: bool = false;
     };
 

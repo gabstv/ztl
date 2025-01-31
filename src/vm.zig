@@ -15,8 +15,8 @@ const Stack = std.ArrayListUnmanaged(Value);
 pub const RefPool = if (builtin.is_test) DebugRefPool else std.heap.MemoryPool(Value.Ref);
 
 pub fn VM(comptime App: type) type {
-    const ALLOW_LEAKS = config.extract(App, "allow_leaks");
     const MAX_CALL_FRAMES = config.extract(App, "max_call_frames");
+    const REFENCE_COUNTING = config.extract(App, "reference_counting");
     return struct {
         app: App,
 
@@ -1062,6 +1062,10 @@ pub fn VM(comptime App: type) type {
         }
 
         pub fn acquire(_: *const Self, value: Value) void {
+            if (comptime REFENCE_COUNTING == .none) {
+                return;
+            }
+
             switch (value) {
                 .ref => |ref| ref.count += 1,
                 else => {},
@@ -1069,6 +1073,10 @@ pub fn VM(comptime App: type) type {
         }
 
         pub fn release(self: *Self, value: Value) void {
+            if (comptime REFENCE_COUNTING == .none) {
+                return;
+            }
+
             if (value != .ref) {
                 return;
             }
@@ -1076,19 +1084,26 @@ pub fn VM(comptime App: type) type {
         }
 
         fn releaseCount(self: *Self, stack: *Stack, n: usize) void {
+
             const items = stack.items;
             const current_len = items.len;
             std.debug.assert(current_len >= n);
             const release_start = current_len - n;
 
-            for (items[release_start..]) |value| {
-                self.release(value);
+            if (comptime REFENCE_COUNTING != .none) {
+                for (items[release_start..]) |value| {
+                    self.release(value);
+                }
             }
 
             stack.items.len = release_start;
         }
 
         fn releaseRef(self: *Self, ref: *Value.Ref) void {
+            if (comptime REFENCE_COUNTING == .none) {
+                return;
+            }
+
             const count = ref.count;
             if (count > 1) {
                 ref.count = count - 1;
@@ -1098,10 +1113,10 @@ pub fn VM(comptime App: type) type {
             switch (ref.value) {
                 .map_iterator => |it| self.releaseRef(it.ref),
                 .list_iterator => |it| self.releaseRef(it.ref),
-                .list => |list| if (comptime ALLOW_LEAKS == false) for (list.items) |value| {
+                .list => |list| if (comptime REFENCE_COUNTING == .strict) for (list.items) |value| {
                     self.release(value);
                 },
-                .map => |map| if (comptime ALLOW_LEAKS == false) for (map.values()) |value| {
+                .map => |map| if (comptime REFENCE_COUNTING == .strict) for (map.values()) |value| {
                     self.release(value);
                 },
                 else => {},
