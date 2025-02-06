@@ -332,6 +332,12 @@ test "Template: string concatenation" {
 
     try testTemplate("world 3", "<%-= 'world ' + 3 %>", .{});
     try testTemplate("world false ok ?", "<%-= 'world ' + false + ` ok ?` %>", .{});
+
+    try testTemplate("hello world", "<%-= 'hello' + ' ' + 'world' %>", .{});
+    try testTemplate("3 world", "<%-= 3.toString() + ' ' + 'world' %>", .{});
+    try testTemplate("true world", "<%-= true.toString() + ' ' + 'world' %>", .{});
+
+    try testTemplate("over 9000!!", "<%-= @a  +' ' + @b + `!!` %>", .{.a = "over", .b = 9000});
 }
 
 test "Template: @include" {
