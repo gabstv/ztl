@@ -325,6 +325,15 @@ test "Template: global in function" {
    , .{.count = 4});
 }
 
+test "Template: string concatenation" {
+    try testTemplate("hello world", "<%-= 'hello' + ' ' + 'world' %>", .{});
+    try testTemplate("3 world", "<%-= 3.toString() + ' ' + 'world' %>", .{});
+    try testTemplate("true world", "<%-= true.toString() + ' ' + 'world' %>", .{});
+
+    try testTemplate("world 3", "<%-= 'world ' + 3 %>", .{});
+    try testTemplate("world false ok ?", "<%-= 'world ' + false + ` ok ?` %>", .{});
+}
+
 test "Template: @include" {
     try testTemplate("included_1",
         \\<% @include("incl_1") %>
@@ -417,7 +426,6 @@ test "Template: multiple index get" {
         , .{.zbs = globals});
     }
 }
-
 
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
     const App = struct {

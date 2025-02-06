@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 
 pub const Value = union(enum) {
     pub const List = std.ArrayListUnmanaged(Value);
+    pub const Buffer = std.ArrayListUnmanaged(u8);
     pub const Map = std.ArrayHashMapUnmanaged(KeyValue, Value, KeyValue.Context, true);
 
     i64: i64,
@@ -22,6 +23,7 @@ pub const Value = union(enum) {
     pub const Ref = struct {
         count: u16 = 1,
         value: union(enum) {
+            buffer: Buffer,
             map_entry: Map.Entry,
             map: Value.Map,
             list: Value.List,
@@ -38,6 +40,7 @@ pub const Value = union(enum) {
             .null => return writer.writeAll("null"),
             .string => |v| if (escape) try writeStringEscaped(writer, v) else try writer.writeAll(v),
             .ref => |ref| switch (ref.value) {
+                .buffer => |buf| if (escape) try writeStringEscaped(writer, buf.items) else try writer.writeAll(buf.items),
                 .list => |list| {
                     var items = list.items;
                     if (items.len == 0) {
@@ -83,40 +86,47 @@ pub const Value = union(enum) {
         return self == .bool and self.bool;
     }
 
-    pub fn equal(self: Value, other: Value) error{Incompatible}!bool {
-        switch (self) {
-            .bool => |l| switch (other) {
+    pub fn equal(a: Value, b: Value) error{Incompatible}!bool {
+        const lhs = a.convertForEquality();
+        const rhs = b.convertForEquality();
+
+        switch (lhs) {
+            .bool => |l| switch (rhs) {
                 .bool => |r| return l == r,
                 .null => return false,
                 else => {},
             },
-            .f64 => |l| switch (other) {
+            .f64 => |l| switch (rhs) {
                 .f64 => |r| return l == r,
                 .i64 => |r| return l == @as(f64, @floatFromInt(r)),
                 .null => return false,
                 else => {},
             },
-            .i64 => |l| switch (other) {
+            .i64 => |l| switch (rhs) {
                 .i64 => |r| return l == r,
                 .f64 => |r| return @as(f64, @floatFromInt(l)) == r,
                 .null => return false,
                 else => {},
             },
-            .null => return other == .null,
-            .string => |l| switch (other) {
+            .null => return rhs == .null,
+            .string => |l| switch (rhs) {
                 .string => |r| return std.mem.eql(u8, l, r),
                 .null => return false,
                 else => {},
             },
             .ref => |ref| {
-                switch (other) {
+                if (ref.value == .buffer and rhs == .string) {
+                    return std.mem.eql(u8, ref.value.buffer.items, rhs.string);
+                }
+                switch (rhs) {
                     .ref => {},
                     .null => return false,
                     else => return error.Incompatible,
                 }
 
                 switch (ref.value) {
-                    .list => |l| switch (other.ref.value) {
+                    .buffer => unreachable, // converted to a string above
+                    .list => |l| switch (rhs.ref.value) {
                         .list => |r| {
                             if (l.items.len != r.items.len) {
                                 return false;
@@ -131,7 +141,7 @@ pub const Value = union(enum) {
                         },
                         else => {},
                     },
-                    .map => |l| switch (other.ref.value) {
+                    .map => |l| switch (rhs.ref.value) {
                         .map => |r| {
                             if (l.count() != r.count()) {
                                 return false;
@@ -147,7 +157,7 @@ pub const Value = union(enum) {
                         },
                         else => {},
                     },
-                    .map_entry => |l| switch (other.ref.value) {
+                    .map_entry => |l| switch (rhs.ref.value) {
                         .map_entry => |r| return l.key_ptr.equal(r.key_ptr.*) and try l.value_ptr.equal(r.value_ptr.*),
                         else => {},
                     },
@@ -166,6 +176,7 @@ pub const Value = union(enum) {
             .null => return "null",
             .string => return "string",
             .ref => |ref| switch (ref.value) {
+                .buffer => return "string",
                 .list => return "list",
                 .map => return "map",
                 .map_entry => return "map entry",
@@ -183,6 +194,7 @@ pub const Value = union(enum) {
             .null => return "null",
             .string => return "a string",
             .ref => |ref| switch (ref.value) {
+                .buffer => return "a string",
                 .list => return "a list",
                 .map => return "a map",
                 .map_entry => return "a map entry",
@@ -192,8 +204,11 @@ pub const Value = union(enum) {
         }
     }
 
-    pub fn order(lhs: Value, rhs: Value) std.math.Order {
+    pub fn order(a: Value, b: Value) std.math.Order {
         const math = std.math;
+
+        const lhs = a.convertForEquality();
+        const rhs = b.convertForEquality();
 
         const lhs_tag = std.meta.activeTag(lhs);
         const rhs_tag = std.meta.activeTag(rhs);
@@ -234,6 +249,7 @@ pub const Value = union(enum) {
                 }
 
                 switch (lhs_ref) {
+                    .buffer => unreachable, // converted to a string above
                     .map_entry => |l| {
                         const key_order = l.key_ptr.*.order(rhs_ref.map_entry.key_ptr.*);
                         if (key_order != .eq) {
@@ -261,6 +277,13 @@ pub const Value = union(enum) {
             },
         }
     }
+
+    fn convertForEquality(self: Value) Value {
+        if (self == .ref and self.ref.value == .buffer) {
+            return .{.string = self.ref.value.buffer.items};
+        }
+        return self;
+    }
 };
 
 pub const KeyValue = union(enum) {
@@ -285,13 +308,13 @@ pub const KeyValue = union(enum) {
         }
     }
 
-    pub fn equal(self: KeyValue, other: KeyValue) bool {
-        switch (self) {
-            .i64 => |l| switch (other) {
+    pub fn equal(lhs: KeyValue, rhs: KeyValue) bool {
+        switch (lhs) {
+            .i64 => |l| switch (rhs) {
                 .i64 => |r| return l == r,
                 .string => return false,
             },
-            .string => |l| switch (other) {
+            .string => |l| switch (rhs) {
                 .string => |r| return std.mem.eql(u8, l, r),
                 .i64 => return false,
             },

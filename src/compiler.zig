@@ -1287,6 +1287,7 @@ pub fn Compiler(comptime A: type) type {
                 8 => switch (@as(u64, @bitCast(name[0..8].*))) {
                     asUint("contains") => _method = .CONTAINS,
                     asUint("removeAt") => _method = .REMOVE_AT,
+                    asUint("toString") => _method = .TO_STRING,
                     else => {},
                 },
                 else => {},
@@ -1318,6 +1319,7 @@ pub fn Compiler(comptime A: type) type {
                 .INDEX_OF => 1,
                 .SORT => 0,
                 .CONCAT => 1,
+                .TO_STRING => 0,
             };
 
             if (expected != arity) {
@@ -3560,6 +3562,15 @@ test "Compiler: method concat" {
             \\ return arr;
         );
     }
+}
+
+test "Compiler: method toString" {
+    try testError("Function 'toString' expects 0 parameters, but called with 2", "return [].toString('', 0)");
+    try testReturnValue(.{.string = "abc"}, "return 'abc'.toString(); ");
+    try testReturnValue(.{.string = "123aabz"}, "return '123aabz'.toString().toString(); ");
+    try testReturnValue(.{.string = "3"}, "return 3.toString(); ");
+    try testReturnValue(.{.string = "false"}, "return false.toString(); ");
+    try testReturnValue(.{.string = "[1, 2, 3]"}, "return [1,2,3].toString(); ");
 }
 
 test "Compiler: partial" {

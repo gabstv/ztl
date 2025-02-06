@@ -271,11 +271,17 @@ pub const Scanner = struct {
         }
 
         scanner_pos.* = pos;
-        const buf = src[start..pos];
+        var buf = src[start..pos];
 
         if (float) {
-            const value = std.fmt.parseFloat(f64, buf) catch return error.InvalidFloat;
-            return .{ .FLOAT = value };
+            const last = buf.len - 1;
+            if (buf[last] != '.') {
+                const value = std.fmt.parseFloat(f64, buf) catch return error.InvalidFloat;
+                return .{ .FLOAT = value };
+            }
+            float = false;
+            scanner_pos.* = pos - 1;
+            buf = buf[0..last];
         }
 
         const value = std.fmt.parseInt(i64, buf, 10) catch return error.InvalidInteger;

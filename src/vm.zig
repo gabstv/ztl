@@ -562,6 +562,8 @@ pub fn VM(comptime App: type) type {
             OutOfMemory,
         };
 
+        const AddError = ArithmeticError || error{OutOfMemory};
+
         fn arithmetic(self: *Self, stack: *Stack, operation: *const fn (self: *Self, left: Value, right: Value) ArithmeticError!Value) !void {
             var values = stack.items;
             std.debug.assert(values.len >= 2);
@@ -573,7 +575,7 @@ pub fn VM(comptime App: type) type {
             stack.items.len = right_index;
         }
 
-        fn add(self: *Self, left: Value, right: Value) ArithmeticError!Value {
+        fn add(self: *Self, left: Value, right: Value) AddError!Value {
             switch (left) {
                 .i64 => |l| switch (right) {
                     .i64 => |r| return .{ .i64 = l + r },
@@ -585,7 +587,47 @@ pub fn VM(comptime App: type) type {
                     .i64 => |r| return .{ .f64 = l + @as(f64, @floatFromInt(r)) },
                     else => {},
                 },
-                else => {},
+                .string => |l| {
+                    var buffer = Value.Buffer{};
+                    try buffer.appendSlice(self._allocator, l);
+                    try right.write(buffer.writer(self._allocator), false);
+
+                    const buffer_ref = try self.createRef();
+                    buffer_ref.* = .{ .count = 1, .value = .{ .buffer = buffer } };
+                    return .{ .ref = buffer_ref };
+                },
+                else => {
+                    const allocator = self._allocator;
+                    if (left == .ref and left.ref.value == .buffer) {
+                        try right.write(left.ref.value.buffer.writer(allocator), false);
+                        return left;
+                    }
+                    switch (right) {
+                        .string => |r| {
+                            var buffer = Value.Buffer{};
+                            try left.write(buffer.writer(allocator), false);
+                            try buffer.appendSlice(allocator, r);
+
+                            const buffer_ref = try self.createRef();
+                            buffer_ref.* = .{ .count = 1, .value = .{ .buffer = buffer } };
+                            return .{ .ref = buffer_ref };
+                        },
+                        .ref => |ref| switch (ref.value) {
+                            .buffer => |r| {
+                                var buffer = Value.Buffer{};
+                                try left.write(buffer.writer(allocator), false);
+                                try buffer.appendSlice(allocator, r.items);
+                                self.releaseRef(ref);
+
+                                const buffer_ref = try self.createRef();
+                                buffer_ref.* = .{ .count = 1, .value = .{ .buffer = buffer } };
+                                return .{ .ref = buffer_ref };
+                            },
+                            else => {},
+                        },
+                        else => {},
+                    }
+                },
             }
             try self.setErrorFmt("Cannot add non-numeric value: {s} + {s}", .{ left, right });
             return error.TypeError;
@@ -920,6 +962,21 @@ pub fn VM(comptime App: type) type {
         }
 
         fn callMethod(self: *Self, allocator: Allocator, target: Value, method: Method, args: []Value) !Value {
+            if (method == .TO_STRING) {
+                if (target == .string) {
+                    return target;
+                }
+                if (target == .ref and target.ref.value == .buffer) {
+                    return target;
+                }
+                var buffer = Value.Buffer{};
+                try target.write(buffer.writer(allocator), false);
+
+                const buffer_ref = try self.createRef();
+                buffer_ref.* = .{ .count = 0, .value = .{ .buffer = buffer } };
+                return .{ .ref = buffer_ref };
+            }
+
             switch (target) {
                 .ref => |ref| switch (ref.value) {
                     .list => |*list| switch (method) {
@@ -984,6 +1041,7 @@ pub fn VM(comptime App: type) type {
                             }
                             return target;
                         },
+                        .TO_STRING => unreachable,
                     },
                     .map => |*map| switch (method) {
                         .REMOVE => {
@@ -997,6 +1055,7 @@ pub fn VM(comptime App: type) type {
                             const key = try self.valueToMapKey(args[0]);
                             return .{ .bool = map.contains(key) };
                         },
+                        .TO_STRING => unreachable,
                         else => {},
                     },
                     else => {},
@@ -1113,12 +1172,24 @@ pub fn VM(comptime App: type) type {
             switch (ref.value) {
                 .map_iterator => |it| self.releaseRef(it.ref),
                 .list_iterator => |it| self.releaseRef(it.ref),
-                .list => |list| if (comptime REFENCE_COUNTING == .strict) for (list.items) |value| {
-                    self.release(value);
+                .list => |*list| {
+                    if (comptime REFENCE_COUNTING == .strict) {
+                        for (list.items) |value| {
+                            self.release(value);
+                        }
+
+                    }
+                    list.deinit(self._allocator);
                 },
-                .map => |map| if (comptime REFENCE_COUNTING == .strict) for (map.values()) |value| {
-                    self.release(value);
+                .map => |*map| {
+                    if (comptime REFENCE_COUNTING == .strict) {
+                        for (map.values()) |value| {
+                            self.release(value);
+                        }
+                    }
+                    map.deinit(self._allocator);
                 },
+                .buffer => |*buf| buf.deinit(self._allocator),
                 else => {},
             }
             self._ref_pool.destroy(ref);
@@ -1178,7 +1249,7 @@ pub fn VM(comptime App: type) type {
                             list.appendAssumeCapacity(try self.createValue(v));
                         }
                         const ref = try self.createRef();
-                        ref.* = .{ .value = .{ .list = list } };
+                        ref.* = .{ .count = 1, .value = .{ .list = list } };
                         return .{ .ref = ref };
                     },
                     else => return error.UnsupportedType,
@@ -1254,6 +1325,7 @@ pub const Method = enum(u16) {
     INDEX_OF = 8,
     SORT = 9,
     CONCAT = 10,
+    TO_STRING = 11,
 
     pub fn name(self: Method) []const u8 {
         return switch (self) {
@@ -1267,6 +1339,7 @@ pub const Method = enum(u16) {
             .INDEX_OF => "indexOf",
             .SORT => "sort",
             .CONCAT => "concat",
+            .TO_STRING => "toString",
         };
     }
 };
