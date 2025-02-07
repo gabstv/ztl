@@ -385,23 +385,16 @@ test "Template: @include error" {
 // https://github.com/karlseguin/ztl/issues/3
 test "Template: multiple index get" {
     {
-        // const array: []const []const u8 = &.{ "Hello", "World" };
-        // const globals = .{
-        //     .report = .{
-        //         .array = array,
-        //     },
-        // };
-        // try testTemplate("[Hello, World];[Hello, World]", "<%= @report['array'] %>;<%= @report['array'] %>", globals);
+        const array: []const []const u8 = &.{ "Hello", "World" };
+        const globals = .{
+            .report = .{
+                .array = array,
+            },
+        };
+        try testTemplate("[Hello, World];[Hello, World]", "<%= @report['array'] %>;<%= @report['array'] %>", globals);
     }
 
     {
-        // const globals = .{
-        //     .report = .{
-        //         .user_options = &.{
-        //             .{.name = "Leto", .description = "Worm", .type = "atreides"},
-        //         },
-        //     },
-        // };
 
         const UserOptions = struct {
             name: []const u8,
