@@ -343,14 +343,16 @@ pub fn Compiler(comptime A: type) type {
 
                         try self.consume(.LEFT_BRACE, "'{{' before function body");
 
-                        var gop = try self.functions.getOrPut(self.arena, name);
-                        if (gop.found_existing) {
-                            if (gop.value_ptr.code_pos != null) {
-                                try self.setErrorFmt("Function '{s}' already declared", .{name});
-                                return error.FunctionRedeclared;
+                        {
+                            const gop = try self.functions.getOrPut(self.arena, name);
+                            if (gop.found_existing) {
+                                if (gop.value_ptr.code_pos != null) {
+                                    try self.setErrorFmt("Function '{s}' already declared", .{name});
+                                    return error.FunctionRedeclared;
+                                }
+                            } else {
+                                gop.value_ptr.* = try self.newFunction(name);
                             }
-                        } else {
-                            gop.value_ptr.* = try self.newFunction(name);
                         }
 
                         try writer.beginFunction(name);
@@ -361,8 +363,14 @@ pub fn Compiler(comptime A: type) type {
                         }
                         try self.endScope(true);
 
-                        gop.value_ptr.arity = @intCast(arity);
-                        gop.value_ptr.code_pos = try writer.endFunction(gop.value_ptr.data_pos, @intCast(arity));
+                        {
+                            // don't try to to reuse `gop` a few lines up.
+                            // the map can change (via the recusive self.block call)
+                            // and that will invalidate gop.
+                            const entry = self.functions.getPtr(name).?;
+                            entry.arity = @intCast(arity);
+                            entry.code_pos = try writer.endFunction(entry.data_pos, @intCast(arity));
+                        }
                     },
                     else => return self.statement(),
                 }

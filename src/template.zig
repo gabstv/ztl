@@ -433,6 +433,23 @@ test "Template: large" {
     try testTemplate("a" ** (1024 * 1024), "a" ** (1024 * 1024), .{});
 }
 
+// https://github.com/karlseguin/ztl/issues/7
+test "Template: nested function" {
+    try testTemplate("",
+        \\ <%-
+        \\ fn first() { return; }
+        \\ fn second() { return; }
+        \\ fn third() { return; }
+        \\ fn fourth() { return; }
+        \\ fn fifth() { return; }
+        \\ fn sixth() {
+        \\     fn nested() { return; }
+        \\     return;
+        \\ }
+        \\ -%>
+    , .{});
+}
+
 fn testTemplate(expected: []const u8, template: []const u8, args: anytype) !void {
     const App = struct {
         pub fn partial(self: @This(), _: Allocator, template_key: []const u8, include_key: []const u8) !?ztl.PartialResult {
