@@ -331,9 +331,16 @@ fn Buffer(comptime initial_size: u32) type {
                     buf = try allocator.alloc(u8, initial_size);
                     self.buf = buf;
                 } else {
-                    const new_capacity = buf.len * 2;
+                    var new_capacity = buf.len;
+                    const required_capacity = self.pos + data.len;
+                    while (true) {
+                        new_capacity +|= new_capacity / 2 + 8;
+                        if (new_capacity >= required_capacity) break;
+                    }
+
                     if (allocator.resize(buf, new_capacity)) {
-                        self.buf = buf[0..new_capacity];
+                        self.buf = buf.ptr[0..new_capacity];
+                        buf = self.buf;
                     } else {
                         const new_buf = try allocator.alloc(u8, new_capacity);
                         @memcpy(new_buf[0..pos], buf[0..pos]);
