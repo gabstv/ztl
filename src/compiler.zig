@@ -1514,7 +1514,7 @@ pub fn Compiler(comptime A: type) type {
         }
 
         fn endInclude(self: *Self) void {
-            const include = self.includes.pop();
+            const include = self.includes.pop().?;
             self.mode = .code;
             self.scanner.src = include.restore_src;
             self.scanner.pos = include.restore_pos;

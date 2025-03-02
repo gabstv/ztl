@@ -115,12 +115,12 @@ pub fn VM(comptime App: type) type {
                         try stack.append(allocator, value);
                     },
                     .OUTPUT => {
-                        var value = stack.pop();
+                        var value = stack.pop().?;
                         try value.write(writer, false);
                         self.release(value);
                     },
                     .OUTPUT_ESCAPE => {
-                        var value = stack.pop();
+                        var value = stack.pop().?;
                         try value.write(writer, true);
                         self.release(value);
                     },
@@ -313,7 +313,7 @@ pub fn VM(comptime App: type) type {
                         }
                         if (op_code == .JUMP_IF_FALSE_POP) {
                             // pop the condition result (true/false) off the stack
-                            self.release(stack.pop());
+                            self.release(stack.pop().?);
                         }
                     },
                     .INITIALIZE => {
@@ -531,7 +531,7 @@ pub fn VM(comptime App: type) type {
                                 break :blk .{ .null = {} };
                             }
 
-                            const v = stack.pop();
+                            const v = stack.pop().?;
                             self.releaseCount(stack, stack.items.len);
                             break :blk v;
                         };
@@ -980,7 +980,7 @@ pub fn VM(comptime App: type) type {
             switch (target) {
                 .ref => |ref| switch (ref.value) {
                     .list => |*list| switch (method) {
-                        .POP => return list.popOrNull() orelse .{ .null = {} },
+                        .POP => return list.pop() orelse .{ .null = {} },
                         .LAST => return list.getLastOrNull() orelse .{ .null = {} },
                         .FIRST => {
                             if (list.items.len == 0) {

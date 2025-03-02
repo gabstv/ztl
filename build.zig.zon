@@ -1,7 +1,8 @@
 .{
-	.name = "ztl",
+	.name = .ztl,
 	.paths = .{""},
 	.version = "0.0.0",
+	.fingerprint = 0xa970a5155c20c65c,
 	.dependencies = .{
 	},
 }
