@@ -66,7 +66,6 @@ pub fn VM(comptime App: type) type {
                 return .{ .null = {} };
             }
 
-            const app = self.app;
             const code = byte_code[9..code_end];
             const data = byte_code[code_end..];
 
@@ -498,7 +497,7 @@ pub fn VM(comptime App: type) type {
                         const function_id = @as(u16, @bitCast(ip[0..2].*));
                         ip += 2;
 
-                        const result = try app.call(self, @enumFromInt(function_id), stack.items[stack.items.len - arity ..]);
+                        const result = try self.app.call(self, @enumFromInt(function_id), stack.items[stack.items.len - arity ..]);
                         self.releaseCount(stack, arity);
                         try stack.append(allocator, result);
                     },
