@@ -4,15 +4,15 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("ztl", .{
+    const ztl_mod = b.addModule("ztl", .{
         .root_source_file = b.path("src/ztl.zig"),
+        .target = target,
+        .optimize = optimize,
     });
 
     // setup tests
     const tests = b.addTest(.{
-        .root_source_file = b.path("src/ztl.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = ztl_mod,
         .test_runner = .{
             .path = b.path("test_runner.zig"),
             .mode = .simple,
